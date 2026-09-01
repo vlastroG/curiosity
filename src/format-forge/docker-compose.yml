@@ -1,0 +1,7 @@
+services:
+  format-forge:
+    build: .
+    ports:
+      - "5174:80"
+    env_file:
+      - ../../.env

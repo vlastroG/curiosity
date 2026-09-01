@@ -1,0 +1,285 @@
+:root {
+  --bg: #0d1f1a;
+  --surface: #142a22;
+  --panel: #16261f;
+  --accent: #34d399;
+  --text: #e8f5ee;
+  --text-muted: #8aa89a;
+  --border: #24392f;
+  --ok-bg: #16261f;
+  --ok-text: #34d399;
+  --ok-border: #2c5a45;
+  --fail-bg: #3a1f1f;
+  --fail-text: #f5b8b8;
+  --fail-border: #5a2e2e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 1200px;
+  margin: 0 auto;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.app__header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app__header h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.app__header-note {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.app__panels {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 20px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 10px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.panel__head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.panel__subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.panel__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.panel__meta span {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.badge {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.badge--ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+  border: 1px solid var(--ok-border);
+}
+
+.badge--fail {
+  background: var(--fail-bg);
+  color: var(--fail-text);
+  border: 1px solid var(--fail-border);
+}
+
+.panel__out {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.panel__err {
+  color: var(--fail-text);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: blink 0.9s step-start infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px 16px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.control--wide {
+  grid-column: 1 / -1;
+}
+
+.control__label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.control__label b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.control select,
+.control input[type='number'],
+.control textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.control textarea {
+  resize: none;
+}
+
+.control select:focus,
+.control input:focus,
+.control textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.control input[type='range'] {
+  accent-color: var(--accent);
+  padding: 0;
+}
+
+.app__input {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.app__input textarea {
+  flex: 1;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.app__input textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.app__input button {
+  padding: 0 20px;
+  background: var(--accent);
+  color: #08160f;
+  border: none;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app__input button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 860px) {
+  /* на узком экране колонка перестаёт быть высотой в экран и страница скроллится,
+     иначе нижний ряд с вводом обрезается */
+  .app {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .app__panels {
+    grid-template-columns: 1fr;
+  }
+
+  .panel__out {
+    min-height: 200px;
+  }
+
+  .controls {
+    grid-template-columns: 1fr 1fr;
+  }
+}
