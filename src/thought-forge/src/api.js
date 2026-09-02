@@ -1,5 +1,5 @@
 const ENDPOINT = 'https://api.deepseek.com/chat/completions';
-const MODEL = 'deepseek-chat';
+const MODEL = 'deepseek-v4-pro';
 
 /**
  * Параметры сэмплинга одинаковы для всех режимов и не выведены в интерфейс:
