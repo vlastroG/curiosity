@@ -1,5 +1,27 @@
 import { complete, sumUsage } from './api.js';
 
+/**
+ * Требования к оформлению ответа. Единственная инструкция, общая для всех четырёх
+ * режимов, включая "прямой ответ": она не говорит, КАК решать задачу, только как
+ * оформить вывод, иначе колонки нечем было бы сравнивать -- модель то сыплет LaTeX,
+ * то markdown-таблицами, и в узкой колонке это нечитаемо.
+ */
+const FORMAT_SYSTEM = [
+  'Отвечай на русском языке в простом Markdown.',
+  'Разрешены: заголовки уровня ### и ниже, маркированные и нумерованные списки,',
+  '**жирный**, *курсив*, `моноширинный` и блоки кода в тройных апострофах.',
+  'Формулы и вычисления записывай обычным текстом в одну строку',
+  '(например: t = S / v = 1500 / 20 = 75 с).',
+  'Категорически не используй LaTeX: ни \\( \\), ни \\[ \\], ни \\frac, ни \\text, ни \\cdot.',
+  'Не используй таблицы -- ответ показывается в узкой колонке.',
+  'Последней строкой ответа напиши "Ответ: ..." -- одна строка с итогом, без пояснений.',
+].join(' ');
+
+/** Собирает system prompt режима: требования к формату плюс инструкции самого режима. */
+function withFormat(...parts) {
+  return [FORMAT_SYSTEM, ...parts.filter(Boolean)].join('\n\n');
+}
+
 const STEPWISE_SYSTEM = [
   'Решай задачу строго пошагово.',
   'Сначала перечисли, что дано и что требуется найти.',
@@ -79,12 +101,12 @@ function done(text, results, stages = []) {
 }
 
 async function runDirect({ messages }) {
-  const result = await complete({ messages });
+  const result = await complete({ messages, system: withFormat() });
   return done(result.text, [result]);
 }
 
 async function runStepwise({ messages }) {
-  const result = await complete({ messages, system: STEPWISE_SYSTEM });
+  const result = await complete({ messages, system: withFormat(STEPWISE_SYSTEM) });
   return done(result.text, [result]);
 }
 
@@ -96,7 +118,7 @@ async function runMetaprompt({ messages, onStage }) {
   });
 
   onStage('решаю по сгенерированному промпту');
-  const solver = await complete({ messages, system: generator.text });
+  const solver = await complete({ messages, system: withFormat(generator.text) });
 
   return done(solver.text, [generator, solver], [
     { title: 'Промпт, который составила модель', text: generator.text },
@@ -106,7 +128,7 @@ async function runMetaprompt({ messages, onStage }) {
 async function runCouncil({ messages, onStage }) {
   onStage('опрашиваю трёх экспертов');
   const settled = await Promise.allSettled(
-    EXPERTS.map((expert) => complete({ messages, system: expert.system }))
+    EXPERTS.map((expert) => complete({ messages, system: withFormat(expert.system) }))
   );
 
   const stages = [];
@@ -141,7 +163,7 @@ async function runCouncil({ messages, onStage }) {
         content: `Задача:\n${lastUserMessage(messages)}\n\nМнения экспертов:\n\n${opinions.join('\n\n')}`,
       },
     ],
-    system: MODERATOR_SYSTEM,
+    system: withFormat(MODERATOR_SYSTEM),
   });
   results.push(moderator);
 
@@ -155,13 +177,13 @@ async function runCouncil({ messages, onStage }) {
 export const MODES = {
   direct: {
     label: 'Прямой ответ',
-    hint: 'без system prompt',
+    hint: 'никаких инструкций по решению, только формат вывода',
     calls: 1,
     run: runDirect,
   },
   stepwise: {
     label: 'Пошагово',
-    hint: 'system prompt требует разбить решение на шаги',
+    hint: 'промпт требует разбить решение на шаги и проверить его',
     calls: 1,
     run: runStepwise,
   },

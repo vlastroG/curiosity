@@ -11,7 +11,7 @@ export const TEMPERATURE = 0.2;
  * (reasoning_content) и на сам ответ. Если рассуждение выбирает весь лимит,
  * приходит finish_reason "length" и пустой content, поэтому запас нужен щедрый.
  */
-export const MAX_TOKENS = 4000;
+export const MAX_TOKENS = 100000;
 
 /**
  * Один запрос к DeepSeek. system опционален: если его нет, system-сообщение
