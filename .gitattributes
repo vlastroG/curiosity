@@ -1,0 +1,3 @@
+# core.autocrlf=true иначе выдаёт docker-entrypoint.sh с CRLF при клоне,
+# и shebang "#!/bin/sh\r" ломает запуск контейнера
+*.sh text eol=lf
