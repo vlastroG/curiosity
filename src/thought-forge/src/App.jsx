@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { MAX_TOKENS } from './api.js';
 import { MODES, MODE_KEYS, runMode } from './modes.js';
 
 const IDLE = { status: 'idle' };
@@ -11,7 +12,7 @@ function plural(count, one, few, many) {
   return many;
 }
 
-function Meta({ latencyMs, usage, calls }) {
+function Meta({ latencyMs, usage, calls, finishReason }) {
   return (
     <div className="meta">
       <span>{latencyMs} мс</span>
@@ -19,6 +20,25 @@ function Meta({ latencyMs, usage, calls }) {
       <span>
         {calls} {plural(calls, 'вызов', 'вызова', 'вызовов')}
       </span>
+      {finishReason && finishReason !== 'stop' && (
+        <span className="meta__warn">finish: {finishReason}</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Модель рассуждающая, и max_tokens тратится сначала на внутреннее рассуждение.
+ * Если лимит выбран целиком, приходит finish_reason "length" и пустой content --
+ * без этого пояснения панель выглядела бы просто пустой.
+ */
+function Answer({ text, finishReason }) {
+  if (text && text.trim()) return <div className="answer">{text}</div>;
+  return (
+    <div className="answer answer--empty">
+      {finishReason === 'length'
+        ? `Модель не вернула текст: весь бюджет max_tokens (${MAX_TOKENS}) ушёл на внутреннее рассуждение. Поднимите MAX_TOKENS в src/api.js или упростите вопрос.`
+        : `Модель вернула пустой ответ (finish_reason: ${finishReason ?? 'неизвестно'}).`}
     </div>
   );
 }
@@ -30,7 +50,13 @@ function Stages({ stages }) {
       {stages.map((stage, index) => (
         <details key={index}>
           <summary className={stage.failed ? 'stages__fail' : undefined}>{stage.title}</summary>
-          <pre>{stage.text}</pre>
+          {stage.failed ? (
+            <pre>{stage.text}</pre>
+          ) : (
+            <div className="stages__body">
+              <Answer text={stage.text} finishReason={stage.finishReason} />
+            </div>
+          )}
         </details>
       ))}
     </div>
@@ -56,7 +82,12 @@ function CompareCard({ modeKey, state, stage }) {
       </div>
 
       {state.status === 'done' && (
-        <Meta latencyMs={state.latencyMs} usage={state.usage} calls={state.calls} />
+        <Meta
+          latencyMs={state.latencyMs}
+          usage={state.usage}
+          calls={state.calls}
+          finishReason={state.finishReason}
+        />
       )}
 
       <div className="panel__body">
@@ -66,7 +97,7 @@ function CompareCard({ modeKey, state, stage }) {
         {state.status === 'done' && (
           <>
             <Stages stages={state.stages} />
-            <div className="answer">{state.text}</div>
+            <Answer text={state.text} finishReason={state.finishReason} />
           </>
         )}
       </div>
@@ -113,6 +144,7 @@ export default function App() {
           latencyMs: result.latencyMs,
           usage: result.usage,
           calls: result.calls,
+          finishReason: result.finishReason,
         },
       ]);
     } catch (caught) {
@@ -225,10 +257,11 @@ export default function App() {
                       latencyMs={message.latencyMs}
                       usage={message.usage}
                       calls={message.calls}
+                      finishReason={message.finishReason}
                     />
                   </div>
                   <Stages stages={message.stages} />
-                  <div className="answer">{message.content}</div>
+                  <Answer text={message.content} finishReason={message.finishReason} />
                 </div>
               )
             )}
@@ -248,16 +281,28 @@ export default function App() {
       )}
 
       {view === 'compare' && (
-        <main className="compare">
-          {MODE_KEYS.map((key) => (
-            <CompareCard
-              key={key}
-              modeKey={key}
-              state={compare === null ? IDLE : compare.results[key]}
-              stage={compareStages[key]}
-            />
-          ))}
-        </main>
+        <>
+          {/* поле ввода очищается при отправке, поэтому вопрос показываем здесь */}
+          <div className="compare__question">
+            <span className="compare__question-label">Вопрос</span>
+            {compare === null ? (
+              <p className="muted">Ещё не задан</p>
+            ) : (
+              <p>{compare.question}</p>
+            )}
+          </div>
+
+          <main className="compare">
+            {MODE_KEYS.map((key) => (
+              <CompareCard
+                key={key}
+                modeKey={key}
+                state={compare === null ? IDLE : compare.results[key]}
+                stage={compareStages[key]}
+              />
+            ))}
+          </main>
+        </>
       )}
 
       {error && <div className="app__error">{error}</div>}

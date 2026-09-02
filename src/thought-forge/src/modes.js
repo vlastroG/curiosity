@@ -72,6 +72,9 @@ function done(text, results, stages = []) {
     stages,
     usage: sumUsage(results),
     calls: results.length,
+    // последний вызов всегда основной: у direct и stepwise он единственный,
+    // у metaprompt это решатель, у council -- модератор
+    finishReason: results[results.length - 1].finishReason,
   };
 }
 
@@ -113,7 +116,11 @@ async function runCouncil({ messages, onStage }) {
   settled.forEach((outcome, index) => {
     const expert = EXPERTS[index];
     if (outcome.status === 'fulfilled') {
-      stages.push({ title: `Мнение: ${expert.title}`, text: outcome.value.text });
+      stages.push({
+        title: `Мнение: ${expert.title}`,
+        text: outcome.value.text,
+        finishReason: outcome.value.finishReason,
+      });
       results.push(outcome.value);
       opinions.push(`### ${expert.title}\n${outcome.value.text}`);
     } else {

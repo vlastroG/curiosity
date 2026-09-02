@@ -237,8 +237,50 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.answer--empty {
+  padding: 10px 12px;
+  background: var(--fail-bg);
+  color: var(--fail-text);
+  border: 1px solid var(--fail-border);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.meta__warn {
+  color: var(--fail-text);
+  border-color: var(--fail-border) !important;
+}
+
+.stages__body {
+  padding: 0 12px 12px;
+  font-size: 13px;
+}
 
 /* вкладка сравнения: один вопрос через все четыре режима */
+.compare__question {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.compare__question-label {
+  flex: none;
+  padding: 3px 10px;
+  background: #1b3a2d;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.compare__question p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .compare {
   flex: 1;
   min-height: 0;

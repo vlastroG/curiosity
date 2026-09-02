@@ -1,12 +1,17 @@
 const ENDPOINT = 'https://api.deepseek.com/chat/completions';
-const MODEL = 'deepseek-v4-pro';
+const MODEL = 'deepseek-v4-flash';
 
 /**
  * Параметры сэмплинга одинаковы для всех режимов и не выведены в интерфейс:
  * сравнение должно показывать разницу от system prompt, а не от температуры.
  */
 export const TEMPERATURE = 0.2;
-export const MAX_TOKENS = 1500;
+/**
+ * Модель рассуждающая: max_tokens -- общий бюджет на внутреннее рассуждение
+ * (reasoning_content) и на сам ответ. Если рассуждение выбирает весь лимит,
+ * приходит finish_reason "length" и пустой content, поэтому запас нужен щедрый.
+ */
+export const MAX_TOKENS = 4000;
 
 /**
  * Один запрос к DeepSeek. system опционален: если его нет, system-сообщение
@@ -52,7 +57,7 @@ export async function complete({ messages, system }) {
   const data = await response.json();
 
   return {
-    text: data.choices[0].message.content,
+    text: data.choices[0].message.content ?? '',
     finishReason: data.choices[0].finish_reason,
     usage: data.usage,
     latencyMs: Math.round(performance.now() - startedAt),
