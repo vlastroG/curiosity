@@ -1,0 +1,7 @@
+services:
+  thought-forge:
+    build: .
+    ports:
+      - "5175:80"
+    env_file:
+      - ../../.env
