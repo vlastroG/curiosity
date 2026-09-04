@@ -1,0 +1,7 @@
+services:
+  scale-forge:
+    build: .
+    ports:
+      - "5178:80"
+    env_file:
+      - ../../.env
