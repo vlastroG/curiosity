@@ -1,0 +1,592 @@
+/*
+ * Оформление под «матрицу»: чёрный фон, зелёный текст, всё моноширинным шрифтом.
+ * Свечение даётся text-shadow и только акцентам -- если светится всё, не читается ничего.
+ */
+
+:root {
+  --bg: #050805;
+  --panel: #0a120a;
+  --panel-2: #0d1a0d;
+  --bubble-user: #10240f;
+  --border: #123312;
+  --border-bright: #1d5c1d;
+  --accent: #00ff41;
+  --accent-dim: #00b32d;
+  --text: #c8f5cf;
+  --text-muted: #5f8a66;
+  --warn: #ffd166;
+  --fail: #ff5f56;
+  --font: 'JetBrains Mono', 'Fira Code', 'Cascadia Mono', Consolas, 'Courier New', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ---------- каркас ---------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.app--boot {
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.app__header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.app__header h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(0, 255, 65, 0.45);
+}
+.app__note {
+  color: var(--text-muted);
+}
+.app__error {
+  margin-left: auto;
+  color: var(--fail);
+}
+
+.app__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---------- список чатов ---------- */
+
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sidebar__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar__title {
+  color: var(--accent-dim);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+
+.sidebar__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.chat-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.chat-row:hover {
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+.chat-row--active {
+  border-color: var(--border-bright);
+  background: var(--panel-2);
+}
+.chat-row--active .chat-row__title {
+  color: var(--accent);
+}
+
+.chat-row__main {
+  flex: 1;
+  min-width: 0;
+}
+.chat-row__title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-row__meta {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-row__delete {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.chat-row__delete:hover {
+  color: var(--fail);
+}
+
+/* ---------- чат ---------- */
+
+.chat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.chat__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.chat__title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--accent);
+}
+.chat__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.stats__model {
+  color: var(--accent-dim);
+}
+.stats__judge {
+  color: var(--accent);
+}
+.stats__sep {
+  flex: 1;
+}
+
+.chat__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bubble {
+  max-width: 900px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bubble--user {
+  align-self: flex-end;
+  background: var(--bubble-user);
+  border-color: var(--border-bright);
+  white-space: pre-wrap;
+}
+.bubble--assistant {
+  align-self: flex-start;
+  background: var(--panel);
+  white-space: normal;
+  width: 100%;
+}
+
+.chat__input {
+  display: flex;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.chat__input textarea {
+  flex: 1;
+  resize: vertical;
+}
+
+/* ---------- метрики, судья, трейс ---------- */
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.meta__cost {
+  color: var(--accent-dim);
+}
+.meta__warn {
+  color: var(--warn);
+}
+
+.judge {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 12px;
+}
+.judge__score {
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+.judge__verdict {
+  color: var(--text-muted);
+}
+
+.trace {
+  margin-top: 8px;
+}
+.trace__toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent-dim);
+  font-family: var(--font);
+  font-size: 11px;
+  cursor: pointer;
+}
+.trace__toggle:hover {
+  color: var(--accent);
+}
+.trace__list {
+  margin: 6px 0 0;
+  padding: 0 0 0 18px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.trace__list li {
+  margin-bottom: 2px;
+}
+.trace__step--failed .trace__name {
+  color: var(--fail);
+}
+.trace__name {
+  color: var(--accent-dim);
+}
+.trace__time {
+  margin-left: 8px;
+}
+.trace__detail {
+  margin-left: 8px;
+  opacity: 0.85;
+}
+
+.notice {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.notice__label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.notice--blocked {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.notice--warn {
+  border-color: rgba(255, 209, 102, 0.4);
+  color: var(--warn);
+}
+.notice--failed {
+  border-color: var(--fail);
+  color: var(--fail);
+}
+
+/* ---------- панель настроек ---------- */
+
+.settings {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.settings__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings__foot {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings__foot .btn {
+  width: 100%;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.field--check {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+}
+.field__label {
+  color: var(--accent-dim);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.field__value {
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.field__hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+/* ---------- элементы управления ---------- */
+
+input,
+select,
+textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 7px 9px;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 6px rgba(0, 255, 65, 0.2);
+}
+textarea {
+  resize: vertical;
+}
+
+input[type='range'] {
+  padding: 0;
+  border: none;
+  accent-color: var(--accent);
+}
+input[type='checkbox'] {
+  accent-color: var(--accent);
+  margin-top: 3px;
+}
+
+.btn {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border-bright);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 7px 14px;
+  cursor: pointer;
+  text-transform: lowercase;
+}
+.btn:hover:not(:disabled) {
+  background: var(--panel-2);
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.2);
+}
+.btn:disabled {
+  color: var(--text-muted);
+  border-color: var(--border);
+  cursor: default;
+}
+.btn--ghost {
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.btn--ghost:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--border-bright);
+}
+.btn--chip {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* мигающий блочный курсор -- статус «агент работает» */
+.cursor {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  margin-left: 4px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: blink 1s steps(1) infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ---------- markdown ---------- */
+
+.md > *:first-child {
+  margin-top: 0;
+}
+.md > *:last-child {
+  margin-bottom: 0;
+}
+.md-p {
+  margin: 8px 0;
+}
+.md-h {
+  margin: 12px 0 6px;
+  color: var(--accent);
+  font-size: 13px;
+}
+.md-list {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.md-code {
+  margin: 8px 0;
+  padding: 10px;
+  overflow-x: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.md-rule {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+.md code {
+  padding: 1px 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.md strong {
+  color: var(--accent);
+}
+
+/* ---------- скроллбары ---------- */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-bright);
+}
+
+@media (max-width: 1100px) {
+  .settings {
+    width: 300px;
+  }
+  .sidebar {
+    width: 210px;
+  }
+}

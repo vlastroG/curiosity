@@ -1,0 +1,215 @@
+package httpapi
+
+import (
+	"errors"
+	"net/http"
+	"strings"
+
+	"agent-sprout/internal/agent"
+	"agent-sprout/internal/store"
+)
+
+// catalogModel -- модель каталога плюс признак доступности: без ключа провайдера
+// вариант показывается, но выбрать его нельзя.
+type catalogModel struct {
+	agent.Model
+	Available bool `json:"available"`
+}
+
+// handleCatalog отдаёт справочник, по которому интерфейс строит панель настроек:
+// модели с ценами, пресеты system prompt и значения по умолчанию. Так константы
+// живут в одном месте -- на бэкенде.
+func (d Deps) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	models := make([]catalogModel, 0, len(agent.Models))
+	for _, model := range agent.Models {
+		models = append(models, catalogModel{Model: model, Available: d.Agent.Available(model)})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"models":  models,
+		"presets": agent.Presets,
+		"defaults": map[string]any{
+			"config": agent.DefaultConfig(d.DefaultModel),
+		},
+	})
+}
+
+func (d Deps) handleListChats(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"chats": d.Store.List()})
+}
+
+// createChatRequest -- тело POST /api/chats. Настройки необязательны: без них
+// берутся значения по умолчанию.
+type createChatRequest struct {
+	Title  string       `json:"title"`
+	Config *configPatch `json:"config"`
+}
+
+func (d Deps) handleCreateChat(w http.ResponseWriter, r *http.Request) {
+	var body createChatRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "тело запроса не разобралось: "+err.Error())
+		return
+	}
+
+	cfg := agent.DefaultConfig(d.DefaultModel)
+	if body.Config != nil {
+		cfg = body.Config.apply(cfg)
+	}
+	if err := cfg.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
+		return
+	}
+
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		title = "Новый чат"
+	}
+
+	chat, err := d.Store.Create(title, cfg)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{"chat": chat})
+}
+
+func (d Deps) handleGetChat(w http.ResponseWriter, r *http.Request) {
+	chat, err := d.Store.Get(r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chat": chat})
+}
+
+// patchChatRequest -- тело PATCH /api/chats/{id}. Оба поля необязательны:
+// можно переименовать чат, не трогая настройки, и наоборот.
+type patchChatRequest struct {
+	Title  *string      `json:"title"`
+	Config *configPatch `json:"config"`
+}
+
+func (d Deps) handlePatchChat(w http.ResponseWriter, r *http.Request) {
+	var body patchChatRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "тело запроса не разобралось: "+err.Error())
+		return
+	}
+
+	var invalid error
+	chat, err := d.Store.Update(r.PathValue("id"), func(chat *store.Chat) error {
+		if body.Title != nil {
+			title := strings.TrimSpace(*body.Title)
+			if title == "" {
+				invalid = errors.New("название чата не может быть пустым")
+				return invalid
+			}
+			chat.Title = title
+		}
+		if body.Config != nil {
+			updated := body.Config.apply(chat.Config)
+			if err := updated.Validate(); err != nil {
+				invalid = err
+				return err
+			}
+			chat.Config = updated
+		}
+		return nil
+	})
+
+	if invalid != nil {
+		writeError(w, http.StatusBadRequest, codeBadRequest, invalid.Error())
+		return
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"chat": chat})
+}
+
+func (d Deps) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
+	if err := d.Store.Delete(r.PathValue("id")); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (d Deps) handleClearMessages(w http.ResponseWriter, r *http.Request) {
+	chat, err := d.Store.ClearMessages(r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chat": chat})
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, codeNotFound, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, codeInternal, err.Error())
+}
+
+// configPatch -- частичное обновление настроек: приходит только то, что поменяли
+// в интерфейсе, остальное берётся из текущей конфигурации чата. Указатели нужны,
+// чтобы отличить "поле не прислали" от "прислали ноль".
+type configPatch struct {
+	Model            *string  `json:"model"`
+	SystemPrompt     *string  `json:"systemPrompt"`
+	Temperature      *float64 `json:"temperature"`
+	MaxTokens        *int     `json:"maxTokens"`
+	TopP             *float64 `json:"topP"`
+	FrequencyPenalty *float64 `json:"frequencyPenalty"`
+	PresencePenalty  *float64 `json:"presencePenalty"`
+	ResponseFormat   *string  `json:"responseFormat"`
+	MaxWords         *int     `json:"maxWords"`
+	HistoryDepth     *int     `json:"historyDepth"`
+	JudgeEnabled     *bool    `json:"judgeEnabled"`
+	MaxInputChars    *int     `json:"maxInputChars"`
+}
+
+func (p configPatch) apply(cfg agent.Config) agent.Config {
+	if p.Model != nil {
+		cfg.Model = *p.Model
+	}
+	if p.SystemPrompt != nil {
+		cfg.SystemPrompt = *p.SystemPrompt
+	}
+	if p.Temperature != nil {
+		cfg.Temperature = *p.Temperature
+	}
+	if p.MaxTokens != nil {
+		cfg.MaxTokens = *p.MaxTokens
+	}
+	if p.TopP != nil {
+		cfg.TopP = *p.TopP
+	}
+	if p.FrequencyPenalty != nil {
+		cfg.FrequencyPenalty = *p.FrequencyPenalty
+	}
+	if p.PresencePenalty != nil {
+		cfg.PresencePenalty = *p.PresencePenalty
+	}
+	if p.ResponseFormat != nil {
+		cfg.ResponseFormat = *p.ResponseFormat
+	}
+	if p.MaxWords != nil {
+		cfg.MaxWords = *p.MaxWords
+	}
+	if p.HistoryDepth != nil {
+		cfg.HistoryDepth = *p.HistoryDepth
+	}
+	if p.JudgeEnabled != nil {
+		cfg.JudgeEnabled = *p.JudgeEnabled
+	}
+	if p.MaxInputChars != nil {
+		cfg.MaxInputChars = *p.MaxInputChars
+	}
+	return cfg
+}
