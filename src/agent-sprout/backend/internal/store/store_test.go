@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"agent-sprout/internal/agent"
+	"agent-sprout/internal/llm"
 )
 
 func TestSnapshotSurvivesRestart(t *testing.T) {
@@ -92,7 +93,7 @@ func TestClearMessagesKeepsConfig(t *testing.T) {
 	}
 }
 
-func TestHistorySkipsBlockedAndFailed(t *testing.T) {
+func TestHistoryKeepsOnlyCompletedExchanges(t *testing.T) {
 	chat := Chat{Messages: []Message{
 		{Role: "user", Kind: KindQuestion, Content: "вопрос"},
 		{Role: "assistant", Kind: KindAnswer, Content: "ответ"},
@@ -102,12 +103,31 @@ func TestHistorySkipsBlockedAndFailed(t *testing.T) {
 	}}
 
 	history := chat.History()
-	if len(history) != 3 {
-		t.Fatalf("в модель должны уходить только вопросы и ответы, получено %+v", history)
+	if len(history) != 2 {
+		t.Fatalf("в контекст уходит только состоявшийся обмен, получено %+v", history)
+	}
+	if history[0].Content != "вопрос" || history[1].Content != "ответ" {
+		t.Fatalf("не тот обмен: %+v", history)
+	}
+}
+
+func TestHistoryDropsQuestionThatOverflowedTheWindow(t *testing.T) {
+	// иначе получается ловушка: не влезший запрос остаётся в истории, и каждая
+	// следующая попытка тяжелее предыдущей
+	chat := Chat{Messages: []Message{
+		{Role: "user", Kind: KindQuestion, Content: "короткий вопрос"},
+		{Role: "assistant", Kind: KindAnswer, Content: "короткий ответ"},
+		{Role: "user", Kind: KindQuestion, Content: "простыня на сто тысяч символов"},
+		{Role: "assistant", Kind: KindOverflow, Content: "не влез в окно контекста"},
+	}}
+
+	history := chat.History()
+	if len(history) != 2 {
+		t.Fatalf("непрошедший вопрос не должен утяжелять следующий запрос: %+v", history)
 	}
 	for _, message := range history {
-		if message.Content == "провайдер вернул 500" {
-			t.Fatal("сбои провайдера не должны попадать в контекст")
+		if message.Content == "простыня на сто тысяч символов" {
+			t.Fatal("вопрос без ответа остался в контексте")
 		}
 	}
 }
@@ -129,5 +149,113 @@ func TestSummaryCountsTotalCost(t *testing.T) {
 	}
 	if diff := list[0].TotalUSD - 0.003; diff > 1e-9 || diff < -1e-9 {
 		t.Fatalf("сумма по чату посчитана неверно: %v", list[0].TotalUSD)
+	}
+}
+
+func TestFinishTurnAttachesInputToTheQuestion(t *testing.T) {
+	s, _ := Open("")
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+
+	if _, err := s.Append(chat.ID, Message{Role: "user", Kind: KindQuestion, Content: "вопрос"}); err != nil {
+		t.Fatalf("добавление вопроса: %v", err)
+	}
+
+	updated, err := s.FinishTurn(chat.ID,
+		&InputMeta{Tokens: 144, USD: 0.0001},
+		Message{Role: "assistant", Kind: KindAnswer, Content: "ответ", Meta: &Meta{TotalUSD: 0.0005}},
+	)
+	if err != nil {
+		t.Fatalf("закрытие хода: %v", err)
+	}
+
+	if len(updated.Messages) != 2 {
+		t.Fatalf("в ленте должны быть вопрос и ответ, получено %d", len(updated.Messages))
+	}
+	// вход относится к вопросу, выход -- к ответу: в этом весь смысл разделения
+	if updated.Messages[0].Input == nil || updated.Messages[0].Input.Tokens != 144 {
+		t.Fatalf("метрики входа должны попасть вопросу: %+v", updated.Messages[0].Input)
+	}
+	if updated.Messages[0].Meta != nil {
+		t.Fatal("у вопроса не должно быть метрик выхода")
+	}
+	if updated.Messages[1].Input != nil {
+		t.Fatal("у ответа не должно быть метрик входа")
+	}
+}
+
+func TestLastTurnUsesTheLatestRealCall(t *testing.T) {
+	chat := Chat{Messages: []Message{
+		{Kind: KindQuestion, Content: "первый"},
+		{Kind: KindAnswer, Meta: &Meta{
+			Usage:     llm.Usage{PromptTokens: 100, CompletionTokens: 50},
+			Reasoning: 20,
+		}},
+		{Kind: KindQuestion, Content: "второй"},
+		{Kind: KindAnswer, Meta: &Meta{
+			Usage:     llm.Usage{PromptTokens: 180, CompletionTokens: 60},
+			Reasoning: 40,
+		}},
+	}}
+
+	last := chat.LastTurn()
+	if !last.Present || last.PromptTokens != 180 {
+		t.Fatalf("брать надо последний вызов: %+v", last)
+	}
+	// рассуждение в историю не уезжает, видимая часть -- 60-40
+	if last.Visible() != 20 {
+		t.Fatalf("видимая часть ответа 20 токенов, получено %d", last.Visible())
+	}
+}
+
+func TestLastTurnIgnoresFailedCalls(t *testing.T) {
+	// сбой провайдера токенов не потратил: usage пустой, окно контекста не сдвинулось
+	chat := Chat{Messages: []Message{
+		{Kind: KindQuestion, Content: "первый"},
+		{Kind: KindAnswer, Meta: &Meta{Usage: llm.Usage{PromptTokens: 100, CompletionTokens: 50}}},
+		{Kind: KindQuestion, Content: "второй"},
+		{Kind: KindFailed, Meta: &Meta{}},
+	}}
+
+	if last := chat.LastTurn(); last.PromptTokens != 100 {
+		t.Fatalf("сбой не должен перебивать последний состоявшийся вызов: %+v", last)
+	}
+}
+
+func TestLastTurnBlockedAnswerDoesNotCarryText(t *testing.T) {
+	// выходная политика отклонила ответ: вызов состоялся и токены потрачены,
+	// но текст в историю следующего запроса не уедет
+	chat := Chat{Messages: []Message{
+		{Kind: KindQuestion, Content: "вопрос"},
+		{Kind: KindBlocked, Meta: &Meta{
+			Usage:     llm.Usage{PromptTokens: 150, CompletionTokens: 400},
+			Reasoning: 400,
+		}},
+	}}
+
+	last := chat.LastTurn()
+	if last.PromptTokens != 150 {
+		t.Fatalf("вход состоявшегося вызова учитывается: %+v", last)
+	}
+	if last.Visible() != 0 {
+		t.Fatalf("отклонённый ответ ничего не переносит, получено %d", last.Visible())
+	}
+}
+
+func TestSummaryCountsInputAndOutputSeparately(t *testing.T) {
+	s, _ := Open("")
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+
+	if _, err := s.Append(chat.ID,
+		Message{Kind: KindQuestion, Input: &InputMeta{Tokens: 144}},
+		Message{Kind: KindAnswer, Meta: &Meta{Usage: llm.Usage{CompletionTokens: 329}, TotalUSD: 0.001}},
+		Message{Kind: KindQuestion, Input: &InputMeta{Tokens: 169}},
+		Message{Kind: KindAnswer, Meta: &Meta{Usage: llm.Usage{CompletionTokens: 121}, TotalUSD: 0.002}},
+	); err != nil {
+		t.Fatalf("добавление: %v", err)
+	}
+
+	list := s.List()[0]
+	if list.TotalIn != 313 || list.TotalOut != 450 {
+		t.Fatalf("суммы входа и выхода считаются раздельно: %+v", list)
 	}
 }

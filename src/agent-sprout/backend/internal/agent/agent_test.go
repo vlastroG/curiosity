@@ -247,3 +247,56 @@ func TestParseVerdictClampsScore(t *testing.T) {
 		t.Fatalf("оценка должна прижиматься к пятёрке, получено %d", verdict.Score)
 	}
 }
+
+func TestRunReportsContextAndHistorySize(t *testing.T) {
+	fake := &fakeLLM{responses: []llm.Response{{
+		Text:         "ответ",
+		FinishReason: "stop",
+		Usage:        llm.Usage{PromptTokens: 169, CompletionTokens: 121},
+	}}}
+
+	cfg := testConfig()
+	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
+		Question: "третий вопрос",
+		History: []Message{
+			{Role: llm.RoleUser, Content: "первый"},
+			{Role: llm.RoleAssistant, Content: "первый ответ"},
+		},
+		Config: cfg,
+		Last:   LastTurn{Present: true, PromptTokens: 144, CompletionTokens: 329, ReasoningTokens: 324},
+	})
+	if err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+
+	if out.HistoryMessages != 2 {
+		t.Fatalf("в запрос уехали два сообщения истории, посчитано %d", out.HistoryMessages)
+	}
+	// окно считается по числам прошлого вызова: 144 входа + 5 видимых токенов ответа
+	if out.Context.Carried != 149 {
+		t.Fatalf("перенос контекста посчитан неверно: %+v", out.Context)
+	}
+	if out.Context.LastPrompt != 144 {
+		t.Fatalf("lastPrompt должен приехать из прошлого вызова, получено %d", out.Context.LastPrompt)
+	}
+}
+
+func TestRunBlocksWhenContextWindowIsFull(t *testing.T) {
+	fake := &fakeLLM{}
+	cfg := testConfig()
+	model, _ := FindModel(cfg.Model)
+
+	_, err := newTestAgent(fake).Run(context.Background(), RunInput{
+		Question: "ещё вопрос",
+		Config:   cfg,
+		Last:     LastTurn{Present: true, PromptTokens: model.ContextTokens},
+	})
+
+	var policyErr *PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("ожидалась PolicyError, получено %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatal("при переполненном окне вызова быть не должно")
+	}
+}

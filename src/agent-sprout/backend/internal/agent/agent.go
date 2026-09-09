@@ -50,6 +50,9 @@ type RunInput struct {
 	Question string
 	History  []Message
 	Config   Config
+	// Last -- числа последнего состоявшегося вызова в этом чате. Нужны, чтобы
+	// посчитать заполненность окна контекста по факту, а не по оценке
+	Last LastTurn
 }
 
 // RunOutput -- результат прохода. Возвращается и при ошибке политики: трейс в этом
@@ -66,6 +69,10 @@ type RunOutput struct {
 	Judge        *JudgeVerdict `json:"judge,omitempty"`
 	Warnings     []string      `json:"warnings,omitempty"`
 	Trace        []Step        `json:"trace"`
+	// Context -- состояние окна контекста перед этим запросом
+	Context ContextState `json:"context"`
+	// HistoryMessages -- сколько сообщений истории уехало в запрос вместе с вопросом
+	HistoryMessages int `json:"historyMessages"`
 }
 
 // ModelUnavailableError -- модель есть в каталоге, но её провайдеру не задан ключ.
@@ -83,18 +90,21 @@ func (e *ModelUnavailableError) Error() string {
 func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	startedAt := time.Now()
 	trace := &tracer{}
-	out := RunOutput{Model: in.Config.Model}
+	window := ContextFor(in.Config, in.Last)
+	out := RunOutput{Model: in.Config.Model, Context: window}
 
 	// 1. Входная политика. Отрабатывает до любого обращения к модели: заблокированный
 	// запрос не стоит ни одного токена.
 	stepStart := time.Now()
-	question, err := checkInput(in.Question, in.Config)
+	question, err := checkInput(in.Question, in.Config, window)
 	if err != nil {
 		trace.record(StepInputPolicy, stepStart, false, err.Error())
 		out.Trace = trace.steps
 		return out, err
 	}
-	trace.record(StepInputPolicy, stepStart, true, "запрос принят")
+	trace.record(StepInputPolicy, stepStart, true, fmt.Sprintf(
+		"запрос принят, окно контекста занято на %.0f%% (%d из %d)",
+		window.Percent, window.Used, window.ModelLimit))
 
 	model, provider, err := a.resolve(in.Config.Model)
 	if err != nil {
@@ -105,8 +115,11 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	// 2. Сборка контекста: system prompt плюс ограниченный хвост истории.
 	stepStart = time.Now()
 	messages := buildMessages(question, in.History, in.Config)
+	// из отправленного вычитаем system prompt и сам вопрос -- остаётся история
+	out.HistoryMessages = len(messages) - 2
 	trace.record(StepBuildContext, stepStart, true,
-		fmt.Sprintf("%d сообщений в запросе, глубина истории %d", len(messages), in.Config.HistoryDepth))
+		fmt.Sprintf("%d сообщений в запросе, из них %d истории при глубине %d",
+			len(messages), out.HistoryMessages, in.Config.HistoryDepth))
 
 	// 3. Вызов модели.
 	stepStart = time.Now()

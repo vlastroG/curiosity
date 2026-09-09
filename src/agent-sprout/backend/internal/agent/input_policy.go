@@ -50,11 +50,24 @@ var injectionMarkers = []string{
 
 // checkInput -- первый этап конвейера. Возвращает очищенный вопрос либо PolicyError,
 // после которого вызова модели не будет.
-func checkInput(question string, cfg Config) (string, error) {
+func checkInput(question string, cfg Config, window ContextState) (string, error) {
 	trimmed := strings.TrimSpace(question)
 
 	if trimmed == "" {
 		return "", &PolicyError{Stage: StageInput, Reason: "пустой запрос"}
+	}
+
+	// окно контекста кончилось: новый вопрос физически некуда положить.
+	// Интерфейс гасит кнопку отправки, но полагаться на это нельзя -- API открыт
+	if window.Full {
+		return "", &PolicyError{
+			Stage: StageInput,
+			Reason: fmt.Sprintf(
+				"окно контекста заполнено: диалог занимает %d токенов плюс %d зарезервировано "+
+					"под ответ, а модель %s вмещает %d. Очистите историю, уменьшите max_tokens "+
+					"или глубину истории",
+				window.Carried, window.Reserve, window.Model, window.ModelLimit),
+		}
 	}
 
 	if length := utf8.RuneCountInString(trimmed); length > cfg.MaxInputChars {

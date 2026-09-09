@@ -34,6 +34,17 @@ func (d Deps) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// chatPayload -- чат вместе с состоянием окна контекста.
+//
+// Отдаются всегда парой: интерфейсу нужно знать не только историю, но и сколько
+// места в окне модели осталось под следующий вопрос.
+func (d Deps) chatPayload(chat store.Chat) map[string]any {
+	return map[string]any{
+		"chat":    chat,
+		"context": agent.ContextFor(chat.Config, chat.LastTurn()),
+	}
+}
+
 func (d Deps) handleListChats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"chats": d.Store.List()})
 }
@@ -72,7 +83,7 @@ func (d Deps) handleCreateChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{"chat": chat})
+	writeJSON(w, http.StatusCreated, d.chatPayload(chat))
 }
 
 func (d Deps) handleGetChat(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +92,7 @@ func (d Deps) handleGetChat(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"chat": chat})
+	writeJSON(w, http.StatusOK, d.chatPayload(chat))
 }
 
 // patchChatRequest -- тело PATCH /api/chats/{id}. Оба поля необязательны:
@@ -128,7 +139,7 @@ func (d Deps) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"chat": chat})
+	writeJSON(w, http.StatusOK, d.chatPayload(chat))
 }
 
 func (d Deps) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +156,7 @@ func (d Deps) handleClearMessages(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"chat": chat})
+	writeJSON(w, http.StatusOK, d.chatPayload(chat))
 }
 
 func writeStoreError(w http.ResponseWriter, err error) {

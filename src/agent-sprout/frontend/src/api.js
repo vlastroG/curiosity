@@ -10,12 +10,14 @@ const BASE = '/api';
 
 /** Ошибка API с кодом: по нему интерфейс отличает отказ политики от аварии провайдера. */
 export class ApiError extends Error {
-  constructor(message, { code, chat } = {}) {
+  constructor(message, { code, chat, context } = {}) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
-    // бэкенд прикладывает актуальный чат к тем ошибкам, которые уже изменили ленту
+    // бэкенд прикладывает актуальный чат к тем ошибкам, которые уже изменили ленту,
+    // и вместе с ним состояние окна контекста
     this.chat = chat;
+    this.context = context;
   }
 }
 
@@ -47,6 +49,7 @@ async function request(path, { method = 'GET', body } = {}) {
     throw new ApiError(data?.error?.message ?? `HTTP ${response.status}`, {
       code: data?.error?.code ?? 'internal',
       chat: data?.chat,
+      context: data?.context,
     });
   }
 
@@ -74,4 +77,9 @@ export function formatUSD(value) {
 export function formatSeconds(ms) {
   if (ms === undefined || ms === null) return '—';
   return `${(ms / 1000).toFixed(1)} с`;
+}
+
+/** Разряды у больших чисел токенов: 65000 читается хуже, чем 65 000. */
+export function formatTokens(value) {
+  return (value ?? 0).toLocaleString('ru-RU');
 }

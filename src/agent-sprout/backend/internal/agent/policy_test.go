@@ -13,8 +13,35 @@ func testConfig() Config {
 	return cfg
 }
 
+// openWindow -- окно контекста пустого чата: места сколько угодно.
+func openWindow() ContextState {
+	return ContextFor(testConfig(), LastTurn{})
+}
+
+func TestCheckInputRejectsWhenContextWindowIsFull(t *testing.T) {
+	cfg := testConfig()
+	cfg.MaxTokens = 4096
+
+	model, _ := FindModel(cfg.Model)
+	// прошлый запрос вместе с резервом под ответ занял всё окно модели
+	full := ContextFor(cfg, LastTurn{Present: true, PromptTokens: model.ContextTokens})
+	if !full.Full {
+		t.Fatalf("окно должно считаться заполненным: %+v", full)
+	}
+
+	_, err := checkInput("ещё один вопрос", cfg, full)
+
+	var policyErr *PolicyError
+	if !errors.As(err, &policyErr) {
+		t.Fatalf("ожидалась PolicyError, получено %v", err)
+	}
+	if !strings.Contains(policyErr.Reason, "окно контекста заполнено") {
+		t.Fatalf("причина должна объяснять переполнение, получено %q", policyErr.Reason)
+	}
+}
+
 func TestCheckInputAcceptsNormalQuestion(t *testing.T) {
-	question, err := checkInput("  сколько будет два плюс два?  ", testConfig())
+	question, err := checkInput("  сколько будет два плюс два?  ", testConfig(), openWindow())
 	if err != nil {
 		t.Fatalf("ожидался пропуск, получена ошибка: %v", err)
 	}
@@ -41,7 +68,7 @@ func TestCheckInputRejects(t *testing.T) {
 			cfg := testConfig()
 			cfg.MaxInputChars = tc.maxInputChars
 
-			_, err := checkInput(tc.question, cfg)
+			_, err := checkInput(tc.question, cfg, openWindow())
 
 			var policyErr *PolicyError
 			if !errors.As(err, &policyErr) {

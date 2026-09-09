@@ -10,10 +10,10 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"agent-sprout/internal/agent"
 	"agent-sprout/internal/llm"
-	"agent-sprout/internal/store"
 )
 
 // Коды ошибок. Приходят в интерфейс и определяют, как показать проблему.
@@ -23,6 +23,7 @@ const (
 	codeInputPolicy  = "input_policy"
 	codeOutputPolicy = "output_policy"
 	codeProvider     = "provider"
+	codeOverflow     = "context_overflow"
 	codeInternal     = "internal"
 )
 
@@ -32,9 +33,6 @@ type errorBody struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
-	// Chat прикладывается там, где состояние чата успело измениться до ошибки:
-	// вопрос уже в ленте, и интерфейсу нужна актуальная версия.
-	Chat *store.Chat `json:"chat,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -52,11 +50,16 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, body)
 }
 
-func writeErrorWithChat(w http.ResponseWriter, status int, code, message string, chat store.Chat) {
-	var body errorBody
-	body.Error.Code = code
-	body.Error.Message = message
-	body.Chat = &chat
+// writeErrorWithChat отдаёт ошибку вместе с состоянием чата.
+//
+// Нужно там, где лента успела измениться до ошибки: вопрос уже записан, метрики входа
+// проставлены, и интерфейсу нужна актуальная версия чата вместе с окном контекста.
+func writeErrorWithChat(w http.ResponseWriter, status int, code, message string, payload map[string]any) {
+	body := make(map[string]any, len(payload)+1)
+	for key, value := range payload {
+		body[key] = value
+	}
+	body["error"] = map[string]string{"code": code, "message": message}
 	writeJSON(w, status, body)
 }
 
@@ -80,10 +83,37 @@ func classify(err error) (status int, code string) {
 
 	var apiErr *llm.APIError
 	if errors.As(err, &apiErr) {
+		// наша проверка окна идёт по фактическим числам прошлого вызова и не знает,
+		// насколько велик новый вопрос -- поэтому провайдер всё ещё может отбить
+		// запрос по длине. Отдаём это отдельным кодом, а не сырым сбоем провайдера
+		if mentionsContextLimit(apiErr.Body) {
+			return http.StatusUnprocessableEntity, codeOverflow
+		}
 		return http.StatusBadGateway, codeProvider
 	}
 
 	return http.StatusBadGateway, codeProvider
+}
+
+// contextLimitMarkers -- по каким словам в ответе провайдера видно, что запрос
+// не влез в окно модели. Формулировки у DeepSeek и OpenRouter разные, общего кода нет.
+var contextLimitMarkers = []string{
+	"context length",
+	"context_length",
+	"maximum context",
+	"context window",
+	"too long",
+	"exceeds the maximum",
+}
+
+func mentionsContextLimit(body string) bool {
+	lowered := strings.ToLower(body)
+	for _, marker := range contextLimitMarkers {
+		if strings.Contains(lowered, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // decodeJSON читает тело запроса с потолком по размеру: без него один запрос

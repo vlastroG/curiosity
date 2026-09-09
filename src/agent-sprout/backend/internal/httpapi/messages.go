@@ -17,6 +17,10 @@ type postMessageRequest struct {
 //
 // Порядок важен. Вопрос попадает в ленту до вызова агента, поэтому даже отклонённый
 // входной политикой запрос остаётся в истории вместе с объяснением, почему он отклонён.
+//
+// Метрики хода раскладываются на два сообщения: вход (prompt_tokens и деньги за него)
+// достаётся вопросу, который этот вызов породил, выход -- ответу модели. Так под каждым
+// пузырём стоит своё число, и складывать соседние больше не нужно.
 func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	var body postMessageRequest
 	if err := decodeJSON(w, r, &body); err != nil {
@@ -31,8 +35,10 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// история берётся до добавления нового вопроса: сам вопрос агент получает отдельно
+	// история и числа прошлого вызова берутся до добавления нового вопроса:
+	// сам вопрос агент получает отдельно
 	history := chat.History()
+	last := chat.LastTurn()
 
 	chat, err = d.Store.Append(chatID, store.Message{
 		Role:    llm.RoleUser,
@@ -48,6 +54,7 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		Question: body.Content,
 		History:  history,
 		Config:   chat.Config,
+		Last:     last,
 	})
 
 	if runErr != nil {
@@ -56,27 +63,35 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		// отказ политики и сбой провайдера остаются в ленте: пользователь должен видеть,
 		// что стало с его вопросом, а не пустоту
 		kind := store.KindFailed
-		if code == codeInputPolicy || code == codeOutputPolicy {
+		switch code {
+		case codeInputPolicy, codeOutputPolicy:
 			kind = store.KindBlocked
+		case codeOverflow:
+			kind = store.KindOverflow
 		}
 
-		meta := store.MetaFrom(out)
-		chat, err = d.Store.Append(chatID, store.Message{
+		// вход оплачен только если вызов состоялся: входная политика режет до него
+		var input *store.InputMeta
+		if out.Calls > 0 {
+			input = store.InputFrom(out)
+		}
+
+		chat, err = d.Store.FinishTurn(chatID, input, store.Message{
 			Role:    llm.RoleAssistant,
 			Kind:    kind,
 			Content: runErr.Error(),
-			Meta:    meta,
+			Meta:    store.MetaFrom(out),
 		})
 		if err != nil {
 			writeStoreError(w, err)
 			return
 		}
 
-		writeErrorWithChat(w, status, code, runErr.Error(), chat)
+		writeErrorWithChat(w, status, code, runErr.Error(), d.chatPayload(chat))
 		return
 	}
 
-	chat, err = d.Store.Append(chatID, store.Message{
+	chat, err = d.Store.FinishTurn(chatID, store.InputFrom(out), store.Message{
 		Role:    llm.RoleAssistant,
 		Kind:    store.KindAnswer,
 		Content: out.Answer,
@@ -87,8 +102,7 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"chat":    chat,
-		"message": chat.Messages[len(chat.Messages)-1],
-	})
+	payload := d.chatPayload(chat)
+	payload["message"] = chat.Messages[len(chat.Messages)-1]
+	writeJSON(w, http.StatusOK, payload)
 }

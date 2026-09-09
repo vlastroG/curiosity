@@ -155,6 +155,29 @@ func (s *Store) Append(id string, messages ...Message) (Chat, error) {
 	})
 }
 
+// FinishTurn закрывает ход: метрики входа получает вопрос, который этот вызов
+// породил, метрики выхода -- ответ модели.
+//
+// Одна операция вместо двух, потому что вход и выход -- две стороны одного вызова:
+// разъехаться они не должны, и снапшот пишется один раз.
+func (s *Store) FinishTurn(id string, input *InputMeta, answer Message) (Chat, error) {
+	return s.Update(id, func(chat *Chat) error {
+		if input != nil {
+			for i := len(chat.Messages) - 1; i >= 0; i-- {
+				if chat.Messages[i].Kind == KindQuestion {
+					chat.Messages[i].Input = input
+					break
+				}
+			}
+		}
+
+		answer.ID = newID()
+		answer.CreatedAt = s.now()
+		chat.Messages = append(chat.Messages, answer)
+		return nil
+	})
+}
+
 // ClearMessages очищает историю, сохраняя настройки чата.
 func (s *Store) ClearMessages(id string) (Chat, error) {
 	return s.Update(id, func(chat *Chat) error {

@@ -267,18 +267,111 @@ body {
 .meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: baseline;
   gap: 10px;
   margin-bottom: 8px;
   padding-bottom: 6px;
   border-bottom: 1px dashed var(--border);
   font-size: 11px;
   color: var(--text-muted);
+  cursor: help;
+}
+/* метрики входа стоят под вопросом пользователя, поэтому линия сверху, а не снизу */
+.meta--input {
+  margin: 8px 0 0;
+  padding: 6px 0 0;
+  border-bottom: none;
+  border-top: 1px dashed var(--border-bright);
+}
+.meta__label {
+  color: var(--accent-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.meta__tokens {
+  color: var(--text);
+}
+.meta__delta {
+  color: var(--accent-dim);
 }
 .meta__cost {
   color: var(--accent-dim);
 }
 .meta__warn {
   color: var(--warn);
+}
+
+.bubble__text {
+  white-space: pre-wrap;
+}
+
+.turn-total {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+/* ---------- окно контекста ---------- */
+
+.ctx {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: help;
+}
+.ctx__label {
+  color: var(--accent-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.ctx__track {
+  position: relative;
+  display: flex;
+  width: 220px;
+  height: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+/* занято -- сплошной заливкой, резерв под ответ -- штриховкой:
+   он ещё не потрачен, но место в окне уже занимает */
+.ctx__fill {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(0, 255, 65, 0.35);
+}
+.ctx__reserve {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--border-bright),
+    var(--border-bright) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+}
+.ctx__numbers {
+  color: var(--text);
+}
+.ctx--warn .ctx__fill {
+  background: var(--warn);
+  box-shadow: none;
+}
+.ctx--warn .ctx__note,
+.ctx--warn .ctx__label {
+  color: var(--warn);
+}
+.ctx--full .ctx__fill {
+  background: var(--fail);
+  box-shadow: none;
+}
+.ctx--full .ctx__note,
+.ctx--full .ctx__label {
+  color: var(--fail);
 }
 
 .judge {
@@ -363,6 +456,15 @@ body {
 .notice--failed {
   border-color: var(--fail);
   color: var(--fail);
+}
+.notice--overflow {
+  border-color: var(--fail);
+  color: var(--fail);
+}
+.notice__raw {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.75;
 }
 
 /* ---------- панель настроек ---------- */

@@ -1,6 +1,13 @@
-import { formatSeconds, formatUSD } from '../api.js';
+import { formatSeconds, formatTokens, formatUSD } from '../api.js';
 
-/** Сводка по всему диалогу: считается по метрикам ответов, лежащим в истории. */
+/**
+ * Сводка по всему диалогу.
+ *
+ * Вход и выход суммируются раздельно и ровно по тем же числам, что показаны
+ * в ленте под сообщениями: вход берётся у вопросов, выход у ответов. Так итог
+ * в шапке сходится с тем, что видно глазами, и заодно видно главное свойство
+ * диалога -- вход растёт быстрее выхода, потому что история едет заново каждый раз.
+ */
 function totalsOf(messages) {
   const answers = messages.filter((message) => message.meta && message.meta.calls > 0);
   if (answers.length === 0) return null;
@@ -9,7 +16,8 @@ function totalsOf(messages) {
 
   return {
     answers: answers.length,
-    tokens: answers.reduce((sum, m) => sum + (m.meta.usage?.total_tokens ?? 0), 0),
+    tokensIn: messages.reduce((sum, m) => sum + (m.input?.tokens ?? 0), 0),
+    tokensOut: answers.reduce((sum, m) => sum + (m.meta.usage?.completion_tokens ?? 0), 0),
     cost: answers.reduce((sum, m) => sum + (m.meta.totalUsd ?? 0), 0),
     avgLatency: answers.reduce((sum, m) => sum + m.meta.latencyMs, 0) / answers.length,
     avgScore: scored.length
@@ -34,7 +42,12 @@ export function StatsBar({ chat }) {
         <>
           <span className="stats__sep" />
           <span>{totals.answers} ответов</span>
-          <span>Σ {totals.tokens} tok</span>
+          <span title="сумма prompt_tokens по всем запросам чата">
+            Σ вход {formatTokens(totals.tokensIn)}
+          </span>
+          <span title="сумма completion_tokens по всем ответам чата">
+            Σ выход {formatTokens(totals.tokensOut)}
+          </span>
           <span className="meta__cost">Σ {formatUSD(totals.cost)}</span>
           <span>~{formatSeconds(totals.avgLatency)} на ответ</span>
           {totals.avgScore !== null && <span>средняя оценка {totals.avgScore.toFixed(1)}</span>}

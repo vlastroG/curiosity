@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
+import { ContextBar } from './ContextBar.jsx';
 import { MessageItem } from './MessageItem.jsx';
 import { StatsBar } from './StatsBar.jsx';
 
 /** Центральная колонка: шапка со сводкой, лента сообщений и поле ввода. */
-export function ChatView({ chat, pending, settingsOpen, onSend, onClear, onToggleSettings }) {
+export function ChatView({ chat, context, pending, settingsOpen, onSend, onClear, onToggleSettings }) {
   const [input, setInput] = useState('');
   const bottomRef = useRef(null);
 
@@ -11,9 +12,13 @@ export function ChatView({ chat, pending, settingsOpen, onSend, onClear, onToggl
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [chat.messages, pending]);
 
+  // окно контекста кончилось: новый вопрос физически некуда положить.
+  // Бэкенд отказал бы и сам, но глухая кнопка честнее потраченного запроса
+  const full = Boolean(context?.full);
+
   const send = () => {
     const text = input.trim();
-    if (!text || pending) return;
+    if (!text || pending || full) return;
     setInput('');
     onSend(text);
   };
@@ -40,6 +45,7 @@ export function ChatView({ chat, pending, settingsOpen, onSend, onClear, onToggl
       </header>
 
       <StatsBar chat={chat} />
+      <ContextBar context={context} />
 
       <div className="chat__body">
         {chat.messages.length === 0 && !pending && (
@@ -68,14 +74,18 @@ export function ChatView({ chat, pending, settingsOpen, onSend, onClear, onToggl
       <footer className="chat__input">
         <textarea
           rows={2}
-          placeholder="Запрос агенту. Enter — отправить, Shift+Enter — перенос строки"
+          placeholder={
+            full
+              ? 'Окно контекста заполнено — очистите историю или уменьшите max_tokens'
+              : 'Запрос агенту. Enter — отправить, Shift+Enter — перенос строки'
+          }
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={pending}
+          disabled={pending || full}
         />
-        <button className="btn" onClick={send} disabled={pending || !input.trim()}>
-          {pending ? 'жду…' : 'отправить'}
+        <button className="btn" onClick={send} disabled={pending || full || !input.trim()}>
+          {pending ? 'жду…' : full ? 'нет места' : 'отправить'}
         </button>
       </footer>
     </main>

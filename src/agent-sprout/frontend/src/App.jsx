@@ -16,6 +16,8 @@ export default function App() {
   const [chats, setChats] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [chat, setChat] = useState(null);
+  // состояние окна контекста приезжает вместе с чатом в каждом ответе API
+  const [context, setContext] = useState(null);
   const [pending, setPending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -44,12 +46,14 @@ export default function App() {
   useEffect(() => {
     if (!activeId) {
       setChat(null);
+      setContext(null);
       return;
     }
     (async () => {
       try {
         const loaded = await api.getChat(activeId);
         setChat(loaded.chat);
+        setContext(loaded.context);
       } catch (caught) {
         fail(caught);
       }
@@ -57,8 +61,9 @@ export default function App() {
   }, [activeId, fail]);
 
   /** Обновляет и открытый чат, и его строку в списке -- сводка в списке живая. */
-  const applyChat = (updated) => {
+  const applyChat = (updated, updatedContext) => {
     setChat(updated);
+    if (updatedContext) setContext(updatedContext);
     setChats((prev) =>
       prev.map((row) =>
         row.id === updated.id
@@ -67,6 +72,11 @@ export default function App() {
               title: updated.title,
               config: updated.config,
               messages: updated.messages.length,
+              totalIn: updated.messages.reduce((sum, m) => sum + (m.input?.tokens ?? 0), 0),
+              totalOut: updated.messages.reduce(
+                (sum, m) => sum + (m.meta?.usage?.completion_tokens ?? 0),
+                0
+              ),
               totalUsd: updated.messages.reduce((sum, m) => sum + (m.meta?.totalUsd ?? 0), 0),
             }
           : row
@@ -81,6 +91,7 @@ export default function App() {
       setChats((prev) => [...prev, summaryOf(created.chat)]);
       setActiveId(created.chat.id);
       setChat(created.chat);
+      setContext(created.context);
     } catch (caught) {
       fail(caught);
     }
@@ -103,12 +114,12 @@ export default function App() {
     setPending(true);
     try {
       const result = await api.sendMessage(chat.id, text);
-      applyChat(result.chat);
+      applyChat(result.chat, result.context);
     } catch (caught) {
       // отказ политики и сбой провайдера уже лежат в ленте: бэкенд прикладывает
       // к таким ошибкам актуальный чат, и показывать отдельную плашку не нужно
       if (caught instanceof ApiError && caught.chat) {
-        applyChat(caught.chat);
+        applyChat(caught.chat, caught.context);
       } else {
         fail(caught);
       }
@@ -121,7 +132,7 @@ export default function App() {
     setError(null);
     try {
       const result = await api.clearMessages(chat.id);
-      applyChat(result.chat);
+      applyChat(result.chat, result.context);
     } catch (caught) {
       fail(caught);
     }
@@ -132,7 +143,7 @@ export default function App() {
     setSaving(true);
     try {
       const result = await api.patchChat(chat.id, { title, config });
-      applyChat(result.chat);
+      applyChat(result.chat, result.context);
     } catch (caught) {
       setSettingsError(caught.message);
     } finally {
@@ -156,7 +167,7 @@ export default function App() {
     <div className="app">
       <header className="app__header">
         <h1>agent sprout</h1>
-        <span className="app__note">неделя 2 · день 6 — первый агент</span>
+        <span className="app__note">неделя 2 · день 8 — работа с токенами</span>
         {error && <span className="app__error">{error}</span>}
       </header>
 
@@ -174,6 +185,7 @@ export default function App() {
           <>
             <ChatView
               chat={chat}
+              context={context}
               pending={pending}
               settingsOpen={settingsOpen}
               onSend={handleSend}
@@ -209,6 +221,8 @@ function summaryOf(chat) {
     title: chat.title,
     config: chat.config,
     messages: chat.messages.length,
+    totalIn: 0,
+    totalOut: 0,
     totalUsd: 0,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,

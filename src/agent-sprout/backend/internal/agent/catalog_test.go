@@ -41,6 +41,37 @@ func TestCostSplitsCacheHitAndMiss(t *testing.T) {
 	}
 }
 
+func TestCostSplitsInputAndOutput(t *testing.T) {
+	model := mustModel(t, "deepseek-v4-flash")
+	usage := llm.Usage{
+		PromptTokens:          3000,
+		PromptCacheHitTokens:  1000,
+		PromptCacheMissTokens: 2000,
+		CompletionTokens:      500,
+	}
+
+	cost := model.Cost(usage, time.Date(2026, 9, 7, 2, 0, 0, 0, time.UTC))
+
+	// вход: 1000*0.014 + 2000*0.44 = 894; выход: 500*1.32 = 660
+	assertUSD(t, cost.InputUSD, 0.000894)
+	assertUSD(t, cost.OutputUSD, 0.00066)
+	// части обязаны складываться в итог: интерфейс показывает их под разными
+	// сообщениями, и сумма по чату должна сходиться с тем, что видно в ленте
+	assertUSD(t, cost.InputUSD+cost.OutputUSD, cost.USD)
+}
+
+func TestCostOffPeakHalvesBothParts(t *testing.T) {
+	model := mustModel(t, "deepseek-v4-flash")
+	usage := llm.Usage{PromptTokens: 3000, CompletionTokens: 500}
+
+	peak := model.Cost(usage, time.Date(2026, 9, 7, 2, 0, 0, 0, time.UTC))
+	offPeak := model.Cost(usage, time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC))
+
+	assertUSD(t, offPeak.InputUSD, peak.InputUSD/2)
+	assertUSD(t, offPeak.OutputUSD, peak.OutputUSD/2)
+	assertUSD(t, offPeak.InputUSD+offPeak.OutputUSD, offPeak.USD)
+}
+
 func TestCostWithoutCacheBreakdownCountsEverythingAsMiss(t *testing.T) {
 	model := mustModel(t, "deepseek-v4-flash")
 	// OpenRouter и подобные не присылают разбивку кеша -- весь вход считается промахом
