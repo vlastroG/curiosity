@@ -32,8 +32,8 @@ func (t LastTurn) Visible() int {
 
 // ContextState -- сколько окна модели уже расписано и сколько осталось на новый вопрос.
 type ContextState struct {
-	Model      string  `json:"model"`
-	ModelLimit int     `json:"modelLimit"`
+	Model      string `json:"model"`
+	ModelLimit int    `json:"modelLimit"`
 	// Reserve -- max_tokens: место, которое надо оставить под будущий ответ
 	Reserve int `json:"reserve"`
 	// LastPrompt -- prompt_tokens последнего запроса, точное число из API

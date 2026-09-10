@@ -22,10 +22,15 @@ type Config struct {
 	// MaxWords -- мягкий лимит длины ответа: уходит в промпт и проверяется
 	// выходной политикой. 0 -- без лимита.
 	MaxWords int `json:"maxWords"`
-	// HistoryDepth -- сколько последних сообщений диалога уходит в контекст.
-	// 0 -- только текущий вопрос, каждый запрос без памяти.
-	HistoryDepth int  `json:"historyDepth"`
-	JudgeEnabled bool `json:"judgeEnabled"`
+	// HistoryDepth -- размер окна истории: сколько сообщений уезжает в модель как есть.
+	// Когда окно заполняется, оно закрывается -- сворачивается в саммари либо
+	// отбрасывается, -- и отсчёт начинается заново. 0 -- памяти нет вовсе,
+	// каждый запрос уходит без контекста.
+	HistoryDepth int `json:"historyDepth"`
+	// SummarizeHistory -- сворачивать закрывшееся окно в саммари отдельным вызовом
+	// модели. Выключено -- окно на переходе просто теряется.
+	SummarizeHistory bool `json:"summarizeHistory"`
+	JudgeEnabled     bool `json:"judgeEnabled"`
 	// MaxInputChars -- потолок длины вопроса, проверяет входная политика.
 	MaxInputChars int `json:"maxInputChars"`
 }
@@ -60,7 +65,10 @@ func DefaultConfig(defaultModel string) Config {
 		TopP:           defaultTopP,
 		ResponseFormat: FormatText,
 		HistoryDepth:   defaultHistoryDepth,
-		MaxInputChars:  defaultMaxInputChars,
+		// сжатие включено: без него закрывшееся окно теряется целиком,
+		// а день 9 -- ровно про то, чтобы этого не происходило
+		SummarizeHistory: true,
+		MaxInputChars:    defaultMaxInputChars,
 	}
 }
 
@@ -93,7 +101,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("max_words не может быть отрицательным")
 	}
 	if c.HistoryDepth < 0 || c.HistoryDepth > maxHistoryDepth {
-		return fmt.Errorf("history_depth должен быть от 0 до %d", maxHistoryDepth)
+		return fmt.Errorf("окно истории должно быть от 0 до %d сообщений", maxHistoryDepth)
 	}
 	if c.MaxInputChars < 1 || c.MaxInputChars > maxInputCharsCap {
 		return fmt.Errorf("max_input_chars должен быть от 1 до %d", maxInputCharsCap)

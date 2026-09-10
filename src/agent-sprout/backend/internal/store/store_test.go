@@ -93,7 +93,7 @@ func TestClearMessagesKeepsConfig(t *testing.T) {
 	}
 }
 
-func TestHistoryKeepsOnlyCompletedExchanges(t *testing.T) {
+func TestWindowKeepsOnlyCompletedExchanges(t *testing.T) {
 	chat := Chat{Messages: []Message{
 		{Role: "user", Kind: KindQuestion, Content: "вопрос"},
 		{Role: "assistant", Kind: KindAnswer, Content: "ответ"},
@@ -102,7 +102,7 @@ func TestHistoryKeepsOnlyCompletedExchanges(t *testing.T) {
 		{Role: "assistant", Kind: KindFailed, Content: "провайдер вернул 500"},
 	}}
 
-	history := chat.History()
+	history := chat.Window().Messages
 	if len(history) != 2 {
 		t.Fatalf("в контекст уходит только состоявшийся обмен, получено %+v", history)
 	}
@@ -111,7 +111,7 @@ func TestHistoryKeepsOnlyCompletedExchanges(t *testing.T) {
 	}
 }
 
-func TestHistoryDropsQuestionThatOverflowedTheWindow(t *testing.T) {
+func TestWindowDropsQuestionThatOverflowedTheWindow(t *testing.T) {
 	// иначе получается ловушка: не влезший запрос остаётся в истории, и каждая
 	// следующая попытка тяжелее предыдущей
 	chat := Chat{Messages: []Message{
@@ -121,7 +121,7 @@ func TestHistoryDropsQuestionThatOverflowedTheWindow(t *testing.T) {
 		{Role: "assistant", Kind: KindOverflow, Content: "не влез в окно контекста"},
 	}}
 
-	history := chat.History()
+	history := chat.Window().Messages
 	if len(history) != 2 {
 		t.Fatalf("непрошедший вопрос не должен утяжелять следующий запрос: %+v", history)
 	}
@@ -160,10 +160,10 @@ func TestFinishTurnAttachesInputToTheQuestion(t *testing.T) {
 		t.Fatalf("добавление вопроса: %v", err)
 	}
 
-	updated, err := s.FinishTurn(chat.ID,
-		&InputMeta{Tokens: 144, USD: 0.0001},
-		Message{Role: "assistant", Kind: KindAnswer, Content: "ответ", Meta: &Meta{TotalUSD: 0.0005}},
-	)
+	updated, err := s.FinishTurn(chat.ID, Turn{
+		Input:  &InputMeta{Tokens: 144, USD: 0.0001},
+		Answer: Message{Role: "assistant", Kind: KindAnswer, Content: "ответ", Meta: &Meta{TotalUSD: 0.0005}},
+	})
 	if err != nil {
 		t.Fatalf("закрытие хода: %v", err)
 	}
@@ -257,5 +257,104 @@ func TestSummaryCountsInputAndOutputSeparately(t *testing.T) {
 	list := s.List()[0]
 	if list.TotalIn != 313 || list.TotalOut != 450 {
 		t.Fatalf("суммы входа и выхода считаются раздельно: %+v", list)
+	}
+}
+
+func TestWindowStartsAfterTheLastBoundary(t *testing.T) {
+	chat := Chat{Messages: []Message{
+		{Role: "user", Kind: KindQuestion, Content: "старый вопрос"},
+		{Role: "assistant", Kind: KindAnswer, Content: "старый ответ"},
+		{Role: "system", Kind: KindSummary, Content: "пересказ первого окна"},
+		{Role: "user", Kind: KindQuestion, Content: "новый вопрос"},
+		{Role: "assistant", Kind: KindAnswer, Content: "новый ответ"},
+	}}
+
+	window := chat.Window()
+	if window.Summary != "пересказ первого окна" {
+		t.Fatalf("пересказ должен приехать из отметки: %q", window.Summary)
+	}
+	if len(window.Messages) != 2 || window.Messages[0].Content != "новый вопрос" {
+		t.Fatalf("в окно попадает только хвост после отметки: %+v", window.Messages)
+	}
+	if window.Compactions != 1 {
+		t.Fatalf("сжатие было одно, посчитано %d", window.Compactions)
+	}
+}
+
+func TestWindowKeepsSummaryAcrossDroppedBoundary(t *testing.T) {
+	// сжатие выключили посреди чата: окно закрылось отбрасыванием, но память,
+	// накопленную раньше, это стирать не должно
+	chat := Chat{Messages: []Message{
+		{Role: "system", Kind: KindSummary, Content: "пересказ первого окна"},
+		{Role: "user", Kind: KindQuestion, Content: "вопрос второго окна"},
+		{Role: "assistant", Kind: KindAnswer, Content: "ответ второго окна"},
+		{Role: "system", Kind: KindDropped},
+		{Role: "user", Kind: KindQuestion, Content: "вопрос третьего окна"},
+		{Role: "assistant", Kind: KindAnswer, Content: "ответ третьего окна"},
+	}}
+
+	window := chat.Window()
+	if window.Summary != "пересказ первого окна" {
+		t.Fatalf("отбрасывание не должно стирать пересказ: %q", window.Summary)
+	}
+	if len(window.Messages) != 2 || window.Messages[0].Content != "вопрос третьего окна" {
+		t.Fatalf("окно должно начинаться после отбрасывания: %+v", window.Messages)
+	}
+	if window.Compactions != 2 {
+		t.Fatalf("границ было две, посчитано %d", window.Compactions)
+	}
+}
+
+func TestFinishTurnPutsBoundaryBeforeTheQuestion(t *testing.T) {
+	s, _ := Open("")
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+
+	if _, err := s.Append(chat.ID,
+		Message{Role: "user", Kind: KindQuestion, Content: "старый вопрос"},
+		Message{Role: "assistant", Kind: KindAnswer, Content: "старый ответ"},
+		Message{Role: "user", Kind: KindQuestion, Content: "вопрос, вызвавший сжатие"},
+	); err != nil {
+		t.Fatalf("подготовка: %v", err)
+	}
+
+	updated, err := s.FinishTurn(chat.ID, Turn{
+		Boundary: &Message{Role: "system", Kind: KindSummary, Content: "пересказ"},
+		Input:    &InputMeta{Tokens: 100},
+		Answer:   Message{Role: "assistant", Kind: KindAnswer, Content: "ответ"},
+	})
+	if err != nil {
+		t.Fatalf("закрытие хода: %v", err)
+	}
+
+	kinds := make([]string, 0, len(updated.Messages))
+	for _, message := range updated.Messages {
+		kinds = append(kinds, message.Kind)
+	}
+	want := []string{KindQuestion, KindAnswer, KindSummary, KindQuestion, KindAnswer}
+	if len(kinds) != len(want) {
+		t.Fatalf("ожидалось %v, получено %v", want, kinds)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("порядок сообщений: ожидалось %v, получено %v", want, kinds)
+		}
+	}
+
+	// граница проходит перед вопросом, значит в окно попадает сам вопрос и ответ
+	if window := updated.Window(); len(window.Messages) != 2 {
+		t.Fatalf("после сжатия окно -- это текущий обмен, получено %+v", window.Messages)
+	}
+}
+
+func TestLastTurnSkipsCompactionCalls(t *testing.T) {
+	// служебный вызов сжатия не должен подменять собой размер диалога
+	chat := Chat{Messages: []Message{
+		{Kind: KindQuestion},
+		{Kind: KindAnswer, Meta: &Meta{Usage: llm.Usage{PromptTokens: 900, CompletionTokens: 100}}},
+		{Kind: KindSummary, Meta: &Meta{Usage: llm.Usage{PromptTokens: 1200, CompletionTokens: 200}}},
+	}}
+
+	if last := chat.LastTurn(); last.PromptTokens != 900 {
+		t.Fatalf("окно контекста считается по основному вызову: %+v", last)
 	}
 }

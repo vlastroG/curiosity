@@ -35,9 +35,9 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// история и числа прошлого вызова берутся до добавления нового вопроса:
+	// окно истории и числа прошлого вызова берутся до добавления нового вопроса:
 	// сам вопрос агент получает отдельно
-	history := chat.History()
+	window := chat.Window()
 	last := chat.LastTurn()
 
 	chat, err = d.Store.Append(chatID, store.Message{
@@ -52,7 +52,8 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 
 	out, runErr := d.Agent.Run(r.Context(), agent.RunInput{
 		Question: body.Content,
-		History:  history,
+		History:  window.Messages,
+		Summary:  window.Summary,
 		Config:   chat.Config,
 		Last:     last,
 	})
@@ -76,11 +77,17 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 			input = store.InputFrom(out)
 		}
 
-		chat, err = d.Store.FinishTurn(chatID, input, store.Message{
-			Role:    llm.RoleAssistant,
-			Kind:    kind,
-			Content: runErr.Error(),
-			Meta:    store.MetaFrom(out),
+		// сжатие могло удаться до того, как упал основной вызов: работа уже оплачена,
+		// и повтор не должен платить за неё второй раз
+		chat, err = d.Store.FinishTurn(chatID, store.Turn{
+			Boundary: store.CompactionMessage(out.Compaction, out.Model),
+			Input:    input,
+			Answer: store.Message{
+				Role:    llm.RoleAssistant,
+				Kind:    kind,
+				Content: runErr.Error(),
+				Meta:    store.MetaFrom(out),
+			},
 		})
 		if err != nil {
 			writeStoreError(w, err)
@@ -91,11 +98,15 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chat, err = d.Store.FinishTurn(chatID, store.InputFrom(out), store.Message{
-		Role:    llm.RoleAssistant,
-		Kind:    store.KindAnswer,
-		Content: out.Answer,
-		Meta:    store.MetaFrom(out),
+	chat, err = d.Store.FinishTurn(chatID, store.Turn{
+		Boundary: store.CompactionMessage(out.Compaction, out.Model),
+		Input:    store.InputFrom(out),
+		Answer: store.Message{
+			Role:    llm.RoleAssistant,
+			Kind:    store.KindAnswer,
+			Content: out.Answer,
+			Meta:    store.MetaFrom(out),
+		},
 	})
 	if err != nil {
 		writeStoreError(w, err)

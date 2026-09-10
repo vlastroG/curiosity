@@ -13,6 +13,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"agent-sprout/internal/llm"
@@ -48,8 +49,12 @@ type Message struct {
 // RunInput -- всё, что нужно агенту для одного прохода.
 type RunInput struct {
 	Question string
-	History  []Message
-	Config   Config
+	// History -- сообщения текущего окна, уже отрезанные хранилищем по последней
+	// границе. Резать их ещё раз агенту не нужно
+	History []Message
+	// Summary -- пересказ свёрнутой части диалога. Пусто, если сжатия ещё не было
+	Summary string
+	Config  Config
 	// Last -- числа последнего состоявшегося вызова в этом чате. Нужны, чтобы
 	// посчитать заполненность окна контекста по факту, а не по оценке
 	Last LastTurn
@@ -73,6 +78,8 @@ type RunOutput struct {
 	Context ContextState `json:"context"`
 	// HistoryMessages -- сколько сообщений истории уехало в запрос вместе с вопросом
 	HistoryMessages int `json:"historyMessages"`
+	// Compaction -- заполнено, если на этом ходе окно истории закрылось
+	Compaction *Compaction `json:"compaction,omitempty"`
 }
 
 // ModelUnavailableError -- модель есть в каталоге, но её провайдеру не задан ключ.
@@ -112,16 +119,23 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		return out, err
 	}
 
-	// 2. Сборка контекста: system prompt плюс ограниченный хвост истории.
-	stepStart = time.Now()
-	messages := buildMessages(question, in.History, in.Config)
-	// из отправленного вычитаем system prompt и сам вопрос -- остаётся история
-	out.HistoryMessages = len(messages) - 2
-	trace.record(StepBuildContext, stepStart, true,
-		fmt.Sprintf("%d сообщений в запросе, из них %d истории при глубине %d",
-			len(messages), out.HistoryMessages, in.Config.HistoryDepth))
+	// 2. Управление контекстом: если окно истории заполнилось, оно закрывается.
+	history, summary, err := a.manageContext(ctx, &out, trace, model, provider, in)
+	if err != nil {
+		out.Trace = trace.steps
+		return out, err
+	}
 
-	// 3. Вызов модели.
+	// 3. Сборка контекста: system prompt, пересказ и сообщения окна.
+	stepStart = time.Now()
+	messages := buildMessages(question, summary, history, in.Config)
+	out.HistoryMessages = len(history)
+	trace.record(StepBuildContext, stepStart, true, fmt.Sprintf(
+		"%d %s в запросе, из них %d истории при окне %d%s",
+		len(messages), Plural(len(messages), "сообщение", "сообщения", "сообщений"),
+		out.HistoryMessages, in.Config.HistoryDepth, summaryNote(summary)))
+
+	// 4. Вызов модели.
 	stepStart = time.Now()
 	resp, err := a.llm.Chat(ctx, provider, llm.Request{
 		Model:            model.ID,
@@ -138,16 +152,16 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		out.Trace = trace.steps
 		return out, err
 	}
-	out.Calls = 1
+	out.Calls++
 	out.Usage = resp.Usage
 	out.FinishReason = resp.FinishReason
 	out.Cost = model.Cost(resp.Usage, a.now())
-	out.TotalUSD = out.Cost.USD
+	out.TotalUSD += out.Cost.USD
 	trace.record(StepLLM, stepStart, true,
 		fmt.Sprintf("%d -> %d токенов, finish_reason=%s",
 			resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.FinishReason))
 
-	// 4. Выходная политика.
+	// 5. Выходная политика.
 	stepStart = time.Now()
 	warnings, err := checkOutput(resp.Text, resp, in.Config)
 	if err != nil {
@@ -160,7 +174,7 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	out.Warnings = warnings
 	trace.record(StepOutputPolicy, stepStart, true, outputDetail(warnings))
 
-	// 5. Судья -- необязательный этап. Его сбой не должен стоить пользователю ответа,
+	// 6. Судья -- необязательный этап. Его сбой не должен стоить пользователю ответа,
 	// который уже получен и оплачен, поэтому ошибка уходит в трейс, а не наверх.
 	if in.Config.JudgeEnabled {
 		stepStart = time.Now()
@@ -205,18 +219,92 @@ func (a *Agent) Available(model Model) bool {
 //
 // История обрезается по HistoryDepth -- это и есть память агента. При нуле каждый
 // запрос уходит без контекста, и разницу хорошо видно на уточняющих вопросах.
-func buildMessages(question string, history []Message, cfg Config) []llm.Message {
+func buildMessages(question, summary string, history []Message, cfg Config) []llm.Message {
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt(cfg)}}
 
-	tail := history
-	if cfg.HistoryDepth < len(tail) {
-		tail = tail[len(tail)-cfg.HistoryDepth:]
+	// пересказ уезжает отдельным system-сообщением сразу после промпта чата:
+	// это память агента, а не реплика собеседника
+	if strings.TrimSpace(summary) != "" {
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: summaryPreamble + summary})
 	}
-	for _, message := range tail {
+
+	for _, message := range history {
 		messages = append(messages, llm.Message{Role: message.Role, Content: message.Content})
 	}
 
 	return append(messages, llm.Message{Role: llm.RoleUser, Content: question})
+}
+
+// manageContext закрывает окно истории, если оно заполнилось.
+//
+// Возвращает то, что реально уедет в запрос: сообщения окна и пересказ. После
+// закрытия окна сообщений не остаётся -- их заменяет пересказ (или не заменяет
+// ничего, если сжатие выключено).
+func (a *Agent) manageContext(
+	ctx context.Context,
+	out *RunOutput,
+	trace *tracer,
+	model Model,
+	provider llm.Provider,
+	in RunInput,
+) ([]Message, string, error) {
+	// нулевое окно -- памяти нет вовсе: ни сообщений, ни пересказа. Отметку в ленте
+	// при этом не ставим, иначе она появлялась бы на каждом ходе
+	if in.Config.HistoryDepth <= 0 {
+		return nil, "", nil
+	}
+
+	// окно ещё не заполнилось -- ничего не трогаем
+	if len(in.History) < in.Config.HistoryDepth {
+		return in.History, in.Summary, nil
+	}
+
+	stepStart := time.Now()
+
+	if !in.Config.SummarizeHistory {
+		// сжатие выключено: окно теряется. Пересказ, накопленный раньше, при этом
+		// остаётся -- выбрасывать уже оплаченную память было бы вредно
+		out.Compaction = &Compaction{Dropped: true, Covered: len(in.History)}
+		trace.record(StepCompact, stepStart, true, fmt.Sprintf(
+			"окно заполнено, %d %s отброшено без сжатия",
+			len(in.History), Plural(len(in.History), "сообщение", "сообщения", "сообщений")))
+		return nil, in.Summary, nil
+	}
+
+	compaction, err := a.compact(ctx, model, provider, in.Summary, in.History)
+	if err != nil {
+		// без пересказа окно уже нельзя выбросить, а отправлять его целиком значит
+		// делать вид, что сжатия не было. Отменяем ход: пользователь повторит запрос,
+		// и сжатие попробует собраться заново
+		trace.record(StepCompact, stepStart, false, err.Error())
+		return nil, "", fmt.Errorf("сжатие истории не удалось: %w", err)
+	}
+
+	// токены и деньги сжатия НЕ приплюсовываются к ходу: у отметки о сжатии
+	// в ленте свои метрики, и складывать их дважды -- значит завысить сумму по чату
+	out.Compaction = compaction
+	trace.record(StepCompact, stepStart, true, fmt.Sprintf(
+		"%d %s свёрнуто в пересказ на %d %s%s",
+		compaction.Covered, Plural(compaction.Covered, "сообщение", "сообщения", "сообщений"),
+		compaction.Usage.CompletionTokens,
+		Plural(compaction.Usage.CompletionTokens, "токен", "токена", "токенов"),
+		recursiveNote(compaction.Recursive)))
+
+	return nil, compaction.Text, nil
+}
+
+func recursiveNote(recursive bool) string {
+	if recursive {
+		return ", вместе с прошлым пересказом"
+	}
+	return ""
+}
+
+func summaryNote(summary string) string {
+	if strings.TrimSpace(summary) != "" {
+		return ", плюс пересказ свёрнутой части"
+	}
+	return ""
 }
 
 // systemPrompt дополняет промпт чата требованиями, которые следуют из настроек.

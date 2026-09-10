@@ -312,6 +312,63 @@ body {
   cursor: help;
 }
 
+/* ---------- граница окна истории ---------- */
+
+.boundary {
+  align-self: stretch;
+  margin: 4px 0;
+  padding: 8px 0;
+  border-top: 1px dashed var(--border-bright);
+  border-bottom: 1px dashed var(--border-bright);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: help;
+}
+.boundary__line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+/* линии по бокам от подписи -- отметка читается как шов в ленте, а не как реплика */
+.boundary__line::before,
+.boundary__line::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+.boundary__label {
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--accent-dim);
+}
+.boundary__meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+.boundary__text {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  word-break: break-word;
+}
+.boundary .trace__toggle {
+  display: block;
+  margin: 6px auto 0;
+}
+.boundary--dropped {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.boundary--dropped .boundary__label {
+  color: var(--warn);
+}
+
 /* ---------- окно контекста ---------- */
 
 .ctx {

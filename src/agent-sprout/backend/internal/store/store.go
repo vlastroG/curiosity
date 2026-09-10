@@ -155,27 +155,61 @@ func (s *Store) Append(id string, messages ...Message) (Chat, error) {
 	})
 }
 
-// FinishTurn закрывает ход: метрики входа получает вопрос, который этот вызов
-// породил, метрики выхода -- ответ модели.
+// Turn -- всё, что появилось в чате за один ход агента.
+type Turn struct {
+	// Boundary -- отметка о сжатии или отбрасывании истории. Встаёт в ленту
+	// ПЕРЕД вопросом, который вызвал переход: именно так проходит граница окна
+	Boundary *Message
+	// Input -- метрики входа, достаются вопросу
+	Input *InputMeta
+	// Answer -- ответ модели либо объяснение, почему его нет
+	Answer Message
+}
+
+// FinishTurn закрывает ход одной операцией.
 //
-// Одна операция вместо двух, потому что вход и выход -- две стороны одного вызова:
-// разъехаться они не должны, и снапшот пишется один раз.
-func (s *Store) FinishTurn(id string, input *InputMeta, answer Message) (Chat, error) {
+// Вход и выход -- две стороны одного вызова, разъехаться они не должны; отметка
+// о границе обязана встать перед своим вопросом, иначе окно съедет и свёрнутые
+// сообщения снова уедут в модель. Поэтому всё под одним замком и с одной записью
+// снапшота.
+func (s *Store) FinishTurn(id string, turn Turn) (Chat, error) {
 	return s.Update(id, func(chat *Chat) error {
-		if input != nil {
-			for i := len(chat.Messages) - 1; i >= 0; i-- {
-				if chat.Messages[i].Kind == KindQuestion {
-					chat.Messages[i].Input = input
-					break
-				}
-			}
+		now := s.now()
+
+		question := lastIndexOfKind(chat.Messages, KindQuestion)
+
+		if turn.Input != nil && question >= 0 {
+			chat.Messages[question].Input = turn.Input
 		}
 
-		answer.ID = newID()
-		answer.CreatedAt = s.now()
-		chat.Messages = append(chat.Messages, answer)
+		if turn.Boundary != nil {
+			boundary := *turn.Boundary
+			boundary.ID = newID()
+			boundary.CreatedAt = now
+
+			at := question
+			if at < 0 {
+				at = len(chat.Messages)
+			}
+			chat.Messages = append(chat.Messages, Message{})
+			copy(chat.Messages[at+1:], chat.Messages[at:])
+			chat.Messages[at] = boundary
+		}
+
+		turn.Answer.ID = newID()
+		turn.Answer.CreatedAt = now
+		chat.Messages = append(chat.Messages, turn.Answer)
 		return nil
 	})
+}
+
+func lastIndexOfKind(messages []Message, kind string) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Kind == kind {
+			return i
+		}
+	}
+	return -1
 }
 
 // ClearMessages очищает историю, сохраняя настройки чата.

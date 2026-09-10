@@ -79,6 +79,27 @@ export function formatSeconds(ms) {
   return `${(ms / 1000).toFixed(1)} с`;
 }
 
+/**
+ * Согласование существительного с числом: 1 сообщение, 2 сообщения, 5 сообщений.
+ * Мелочь, но «свёрнуто 4 сообщений» читается как опечатка и подрывает доверие
+ * к остальным цифрам на экране.
+ */
+export function plural(count, one, few, many) {
+  const mod100 = Math.abs(count) % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+
+  switch (mod100 % 10) {
+    case 1:
+      return one;
+    case 2:
+    case 3:
+    case 4:
+      return few;
+    default:
+      return many;
+  }
+}
+
 /** Разряды у больших чисел токенов: 65000 читается хуже, чем 65 000. */
 export function formatTokens(value) {
   return (value ?? 0).toLocaleString('ru-RU');

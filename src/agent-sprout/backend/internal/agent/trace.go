@@ -14,11 +14,33 @@ type Step struct {
 // Названия этапов конвейера.
 const (
 	StepInputPolicy  = "input policy"
+	StepCompact      = "сжатие истории"
 	StepBuildContext = "сборка контекста"
 	StepLLM          = "вызов модели"
 	StepOutputPolicy = "output policy"
 	StepJudge        = "судья"
 )
+
+// Plural согласует существительное с числом: 1 сообщение, 2 сообщения, 5 сообщений.
+// Нужен трейсу и деталям шагов -- «4 сообщений» читается как опечатка.
+func Plural(count int, one, few, many string) string {
+	if count < 0 {
+		count = -count
+	}
+
+	if mod100 := count % 100; mod100 >= 11 && mod100 <= 14 {
+		return many
+	}
+
+	switch count % 10 {
+	case 1:
+		return one
+	case 2, 3, 4:
+		return few
+	default:
+		return many
+	}
+}
 
 // tracer накапливает этапы по ходу конвейера.
 type tracer struct {

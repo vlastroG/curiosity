@@ -167,7 +167,7 @@ export default function App() {
     <div className="app">
       <header className="app__header">
         <h1>agent sprout</h1>
-        <span className="app__note">неделя 2 · день 8 — работа с токенами</span>
+        <span className="app__note">неделя 2 · день 9 — сжатие истории</span>
         {error && <span className="app__error">{error}</span>}
       </header>
 

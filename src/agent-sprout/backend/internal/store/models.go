@@ -22,7 +22,19 @@ const (
 	// KindOverflow -- запрос не влез в окно контекста модели. Отделён от прочих сбоев:
 	// это не авария провайдера, а прямое следствие размера диалога
 	KindOverflow = "overflow"
+	// KindSummary -- саммари свёрнутой части диалога. Не реплика собеседника,
+	// а служебная отметка: с этого места история заменена коротким пересказом
+	KindSummary = "summary"
+	// KindDropped -- история отброшена без сжатия, потому что тумблер выключен.
+	// Тоже граница окна, но памяти после неё не остаётся
+	KindDropped = "dropped"
 )
+
+// IsBoundary -- закрывает ли сообщение окно истории. Всё, что до границы,
+// в модель больше не уезжает.
+func IsBoundary(kind string) bool {
+	return kind == KindSummary || kind == KindDropped
+}
 
 // Message -- одно сообщение ленты.
 type Message struct {
@@ -31,12 +43,24 @@ type Message struct {
 	Kind      string    `json:"kind"`
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"createdAt"`
+	// Compaction заполнен у отметок о границе окна: сколько сообщений выпало
+	// из контекста и вошло ли в сжатие предыдущее саммари.
+	Compaction *Compaction `json:"compaction,omitempty"`
 	// Meta заполнена только у ответов модели: всё, что относится к выходу вызова.
 	Meta *Meta `json:"meta,omitempty"`
 	// Input заполнен только у вопросов пользователя: во что обошёлся вход запроса,
 	// который этот вопрос вызвал. У вопросов, отклонённых политикой, пуст --
 	// вызова не было, платить не за что.
 	Input *InputMeta `json:"input,omitempty"`
+}
+
+// Compaction -- служебные данные отметки о границе окна.
+type Compaction struct {
+	// Covered -- сколько сообщений окна перестали уезжать в модель
+	Covered int `json:"covered"`
+	// Recursive -- в сжатие вошло предыдущее саммари, то есть это уже не первый
+	// переход и пересказ склеен из пересказа
+	Recursive bool `json:"recursive"`
 }
 
 // InputMeta -- метрики входа: сколько токенов и денег стоил запрос целиком.
@@ -81,6 +105,48 @@ func InputFrom(out agent.RunOutput) *InputMeta {
 		USD:             out.Cost.InputUSD,
 		OffPeak:         out.Cost.OffPeak,
 	}
+}
+
+// CompactionMessage превращает результат сжатия в отметку ленты.
+//
+// Метрики служебного вызова живут на самой отметке, а не в метриках хода: так каждая
+// цифра в ленте принадлежит ровно одному сообщению, и сумма по чату сходится.
+func CompactionMessage(c *agent.Compaction, model string) *Message {
+	if c == nil {
+		return nil
+	}
+
+	message := &Message{
+		Role:       llm.RoleSystem,
+		Kind:       KindDropped,
+		Compaction: &Compaction{Covered: c.Covered, Recursive: c.Recursive},
+	}
+
+	// отбрасывание не стоит ни одного вызова: отмечать нечего, кроме самого факта
+	if c.Dropped {
+		return message
+	}
+
+	message.Kind = KindSummary
+	message.Content = c.Text
+	message.Input = &InputMeta{
+		Model:     model,
+		Tokens:    c.Usage.PromptTokens,
+		CacheHit:  c.Usage.PromptCacheHitTokens,
+		CacheMiss: c.Usage.PromptCacheMissTokens,
+		USD:       c.Cost.InputUSD,
+		OffPeak:   c.Cost.OffPeak,
+	}
+	message.Meta = &Meta{
+		Model:     model,
+		Usage:     c.Usage,
+		Reasoning: c.Usage.ReasoningTokens(),
+		Cost:      c.Cost,
+		TotalUSD:  c.Cost.USD,
+		LatencyMs: c.LatencyMs,
+		Calls:     1,
+	}
+	return message
 }
 
 // Meta -- метрики одного прохода агента, которые показываются под ответом.
@@ -140,9 +206,24 @@ type Summary struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// History отдаёт историю в виде, который понимает агент.
+// Window -- то, что уедет в модель вместо всего диалога: текущее саммари
+// и хвост сообщений после него.
+type Window struct {
+	// Summary -- пересказ свёрнутой части диалога. Пусто, если сжатия ещё не было
+	Summary string
+	// Messages -- сообщения после последнего сжатия, они идут в модель как есть
+	Messages []agent.Message
+	// Compactions -- сколько раз история этого чата уже сворачивалась
+	Compactions int
+}
+
+// Window собирает контекст чата: саммари плюс сообщения после него.
 //
-// В контекст уходят только состоявшиеся обмены. Отказы политики и сбои провайдера
+// Граница окна -- последнее сообщение вида KindSummary. Всё, что до него, в модель
+// не уезжает: оно заменено пересказом. Так саммари хранится ровно в одном месте
+// и одновременно видно человеку в ленте.
+//
+// В окно попадают только состоявшиеся обмены. Отказы политики и сбои провайдера
 // отбрасываются: они остаются в ленте для человека, но модели их показывать
 // бессмысленно и вредно.
 //
@@ -150,22 +231,38 @@ type Summary struct {
 // запрос, не влезший в окно контекста, оставляет свой огромный текст в истории,
 // каждая следующая попытка становится ещё тяжелее, и выбраться из переполнения
 // можно только очисткой чата.
-func (c Chat) History() []agent.Message {
-	history := make([]agent.Message, 0, len(c.Messages))
+func (c Chat) Window() Window {
+	window := Window{Messages: make([]agent.Message, 0, len(c.Messages))}
 
+	// граница окна -- последняя служебная отметка. Текст пересказа при этом берётся
+	// у последнего саммари: если сжатие выключили посреди чата, отметки об отбрасывании
+	// закрывают окно, но уже накопленную память не стирают
+	start := 0
 	for i, message := range c.Messages {
+		if !IsBoundary(message.Kind) {
+			continue
+		}
+		if message.Kind == KindSummary {
+			window.Summary = message.Content
+		}
+		window.Compactions++
+		start = i + 1
+	}
+
+	for i := start; i < len(c.Messages); i++ {
+		message := c.Messages[i]
 		switch message.Kind {
 		case KindAnswer:
-			history = append(history, agent.Message{Role: message.Role, Content: message.Content})
+			window.Messages = append(window.Messages, agent.Message{Role: message.Role, Content: message.Content})
 		case KindQuestion:
 			answered := i+1 < len(c.Messages) && c.Messages[i+1].Kind == KindAnswer
 			if answered {
-				history = append(history, agent.Message{Role: message.Role, Content: message.Content})
+				window.Messages = append(window.Messages, agent.Message{Role: message.Role, Content: message.Content})
 			}
 		}
 	}
 
-	return history
+	return window
 }
 
 // LastTurn -- числа последнего состоявшегося вызова модели в этом чате.
@@ -177,6 +274,11 @@ func (c Chat) History() []agent.Message {
 func (c Chat) LastTurn() agent.LastTurn {
 	for i := len(c.Messages) - 1; i >= 0; i-- {
 		message := c.Messages[i]
+		// сжатие -- служебный вызов: его размер ничего не говорит о том,
+		// сколько места в окне занимает сам диалог
+		if IsBoundary(message.Kind) {
+			continue
+		}
 		if message.Meta == nil || message.Meta.Usage.PromptTokens == 0 {
 			continue
 		}

@@ -181,6 +181,7 @@ type configPatch struct {
 	ResponseFormat   *string  `json:"responseFormat"`
 	MaxWords         *int     `json:"maxWords"`
 	HistoryDepth     *int     `json:"historyDepth"`
+	SummarizeHistory *bool    `json:"summarizeHistory"`
 	JudgeEnabled     *bool    `json:"judgeEnabled"`
 	MaxInputChars    *int     `json:"maxInputChars"`
 }
@@ -215,6 +216,9 @@ func (p configPatch) apply(cfg agent.Config) agent.Config {
 	}
 	if p.HistoryDepth != nil {
 		cfg.HistoryDepth = *p.HistoryDepth
+	}
+	if p.SummarizeHistory != nil {
+		cfg.SummarizeHistory = *p.SummarizeHistory
 	}
 	if p.JudgeEnabled != nil {
 		cfg.JudgeEnabled = *p.JudgeEnabled

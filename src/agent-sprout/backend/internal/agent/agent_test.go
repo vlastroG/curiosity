@@ -97,10 +97,10 @@ func TestRunHappyPath(t *testing.T) {
 	}
 }
 
-func TestRunSendsSystemPromptAndTrimsHistory(t *testing.T) {
+func TestRunSendsSystemPromptAndWholeWindow(t *testing.T) {
 	fake := &fakeLLM{}
 	cfg := testConfig()
-	cfg.HistoryDepth = 2
+	cfg.HistoryDepth = 10
 
 	history := []Message{
 		{Role: llm.RoleUser, Content: "первый"},
@@ -118,18 +118,19 @@ func TestRunSendsSystemPromptAndTrimsHistory(t *testing.T) {
 	}
 
 	sent := fake.calls[0].Messages
-	// system + два последних сообщения истории + текущий вопрос
-	if len(sent) != 4 {
-		t.Fatalf("ожидались 4 сообщения, отправлено %d: %+v", len(sent), sent)
+	// system + всё окно + текущий вопрос: резать хвост агенту больше не нужно,
+	// окно ему приезжает уже отрезанным по границе
+	if len(sent) != 6 {
+		t.Fatalf("ожидались 6 сообщений, отправлено %d: %+v", len(sent), sent)
 	}
 	if sent[0].Role != llm.RoleSystem {
 		t.Fatalf("первым должен идти system, получено %q", sent[0].Role)
 	}
-	if sent[1].Content != "второй" || sent[2].Content != "второй ответ" {
-		t.Fatalf("в контекст должен попасть хвост истории, получено %+v", sent[1:3])
+	if sent[1].Content != "первый" || sent[4].Content != "второй ответ" {
+		t.Fatalf("окно должно уехать целиком, получено %+v", sent[1:5])
 	}
-	if sent[3].Content != "третий" {
-		t.Fatalf("последним должен идти текущий вопрос, получено %q", sent[3].Content)
+	if sent[5].Content != "третий" {
+		t.Fatalf("последним должен идти текущий вопрос, получено %q", sent[5].Content)
 	}
 }
 
@@ -138,16 +139,22 @@ func TestRunWithoutHistoryDepthSendsOnlyQuestion(t *testing.T) {
 	cfg := testConfig()
 	cfg.HistoryDepth = 0
 
-	if _, err := newTestAgent(fake).Run(context.Background(), RunInput{
+	// нулевое окно -- памяти нет вовсе: ни сообщений, ни накопленного пересказа
+	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
 		Question: "третий",
 		History:  []Message{{Role: llm.RoleUser, Content: "первый"}},
+		Summary:  "пересказ из прошлой жизни этого чата",
 		Config:   cfg,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("неожиданная ошибка: %v", err)
 	}
 
 	if sent := fake.calls[0].Messages; len(sent) != 2 {
-		t.Fatalf("при нулевой глубине истории должны уйти system и вопрос, получено %+v", sent)
+		t.Fatalf("при нулевом окне должны уйти system и вопрос, получено %+v", sent)
+	}
+	if out.Compaction != nil {
+		t.Fatal("при нулевом окне сжимать нечего, отметка не нужна")
 	}
 }
 

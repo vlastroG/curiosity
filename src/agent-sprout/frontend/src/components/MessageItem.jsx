@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { BoundaryMessage } from './BoundaryMessage.jsx';
 import { Markdown } from '../markdown.jsx';
 import { formatSeconds, formatTokens, formatUSD } from '../api.js';
 
@@ -152,6 +153,11 @@ function Trace({ trace }) {
 }
 
 export function MessageItem({ message }) {
+  // граница окна истории -- не реплика, а служебная отметка во всю ширину ленты
+  if (message.kind === 'summary' || message.kind === 'dropped') {
+    return <BoundaryMessage message={message} />;
+  }
+
   if (message.kind === 'question') {
     return (
       <div className="bubble bubble--user">

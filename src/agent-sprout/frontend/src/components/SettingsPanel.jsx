@@ -141,11 +141,34 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
         />
 
         <NumberField
-          label="глубина истории"
-          hint="сколько последних сообщений уходит в контекст; 0 — каждый запрос без памяти"
+          label="окно истории"
+          hint={
+            'сколько сообщений уходит в модель как есть. Когда окно заполняется, оно ' +
+            'закрывается — сворачивается в пересказ или отбрасывается, — и отсчёт ' +
+            'начинается заново. 0 — памяти нет вовсе, каждый запрос без контекста'
+          }
           value={draft.historyDepth}
           onChange={(historyDepth) => set({ historyDepth })}
         />
+
+        <label className="field field--check">
+          <input
+            type="checkbox"
+            checked={draft.summarizeHistory}
+            onChange={(event) => set({ summarizeHistory: event.target.checked })}
+          />
+          <span>
+            <span className="field__label">сжимать историю</span>
+            <span className="field__hint">
+              на закрытии окна агент отдельным вызовом модели сворачивает его в короткий
+              пересказ и дальше подставляет пересказ вместо самих сообщений. Каждое
+              следующее сжатие складывает прошлый пересказ с новым окном, так что память
+              копится, а запрос не растёт. Выключено — окно на переходе просто теряется.
+              Стоит одного дополнительного вызова модели на каждые {draft.historyDepth}{' '}
+              сообщений
+            </span>
+          </span>
+        </label>
 
         <NumberField
           label="лимит длины запроса"
