@@ -65,6 +65,7 @@ export const api = {
   deleteChat: (id) => request(`/chats/${id}`, { method: 'DELETE' }),
   sendMessage: (id, content) => request(`/chats/${id}/messages`, { method: 'POST', body: { content } }),
   clearMessages: (id) => request(`/chats/${id}/messages`, { method: 'DELETE' }),
+  checkpoint: (id, tag) => request(`/chats/${id}/checkpoint`, { method: 'POST', body: { tag } }),
 };
 
 /** Форматирование чисел, общее для всех метрик интерфейса. */

@@ -21,6 +21,11 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [saving, setSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // форма чекпоинта живёт здесь, а не в ChatView: ошибку занятого тэга приносит API,
+  // и показать её надо прямо в форме
+  const [checkpointOpen, setCheckpointOpen] = useState(false);
+  const [checkpointBusy, setCheckpointBusy] = useState(false);
+  const [checkpointError, setCheckpointError] = useState(null);
   const [error, setError] = useState(null);
   const [settingsError, setSettingsError] = useState(null);
 
@@ -44,6 +49,9 @@ export default function App() {
 
   // подгрузка выбранного чата целиком: в списке истории нет
   useEffect(() => {
+    setCheckpointOpen(false);
+    setCheckpointError(null);
+
     if (!activeId) {
       setChat(null);
       setContext(null);
@@ -72,6 +80,7 @@ export default function App() {
               title: updated.title,
               config: updated.config,
               messages: updated.messages.length,
+              facts: updated.facts?.length ?? 0,
               totalIn: updated.messages.reduce((sum, m) => sum + (m.input?.tokens ?? 0), 0),
               totalOut: updated.messages.reduce(
                 (sum, m) => sum + (m.meta?.usage?.completion_tokens ?? 0),
@@ -128,6 +137,27 @@ export default function App() {
     }
   }
 
+  function toggleCheckpoint() {
+    setCheckpointError(null);
+    setCheckpointOpen((open) => !open);
+  }
+
+  async function handleCheckpoint(tag) {
+    setCheckpointError(null);
+    setCheckpointBusy(true);
+    try {
+      const created = await api.checkpoint(chat.id, tag);
+      // ветка появляется в списке, но активным остаётся исходный чат:
+      // чекпоинт делают, чтобы было куда вернуться, а не чтобы уйти прямо сейчас
+      setChats((prev) => [...prev, summaryOf(created.chat)]);
+      setCheckpointOpen(false);
+    } catch (caught) {
+      setCheckpointError(caught.message);
+    } finally {
+      setCheckpointBusy(false);
+    }
+  }
+
   async function handleClear() {
     setError(null);
     try {
@@ -167,7 +197,7 @@ export default function App() {
     <div className="app">
       <header className="app__header">
         <h1>agent sprout</h1>
-        <span className="app__note">неделя 2 · день 9 — сжатие истории</span>
+        <span className="app__note">неделя 2 · день 10 — стратегии контекста</span>
         {error && <span className="app__error">{error}</span>}
       </header>
 
@@ -188,9 +218,16 @@ export default function App() {
               context={context}
               pending={pending}
               settingsOpen={settingsOpen}
+              checkpoint={{
+                open: checkpointOpen,
+                busy: checkpointBusy,
+                error: checkpointError,
+                toggle: toggleCheckpoint,
+              }}
               onSend={handleSend}
               onClear={handleClear}
               onToggleSettings={() => setSettingsOpen((open) => !open)}
+              onCheckpoint={handleCheckpoint}
             />
             {settingsOpen && (
               <SettingsPanel
@@ -221,6 +258,10 @@ function summaryOf(chat) {
     title: chat.title,
     config: chat.config,
     messages: chat.messages.length,
+    facts: chat.facts?.length ?? 0,
+    tag: chat.tag,
+    clonedAt: chat.clonedAt,
+    parentId: chat.parentId,
     totalIn: 0,
     totalOut: 0,
     totalUsd: 0,

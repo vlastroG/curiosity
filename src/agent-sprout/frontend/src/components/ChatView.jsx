@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
+import { CheckpointForm } from './CheckpointForm.jsx';
 import { ContextBar } from './ContextBar.jsx';
+import { FactsPanel } from './FactsPanel.jsx';
 import { MessageItem } from './MessageItem.jsx';
 import { StatsBar } from './StatsBar.jsx';
 
 /** Центральная колонка: шапка со сводкой, лента сообщений и поле ввода. */
-export function ChatView({ chat, context, pending, settingsOpen, onSend, onClear, onToggleSettings }) {
+export function ChatView({
+  chat,
+  context,
+  pending,
+  settingsOpen,
+  checkpoint,
+  onSend,
+  onClear,
+  onToggleSettings,
+  onCheckpoint,
+}) {
   const [input, setInput] = useState('');
   const bottomRef = useRef(null);
 
@@ -38,6 +50,14 @@ export function ChatView({ chat, context, pending, settingsOpen, onSend, onClear
           <button className="btn btn--ghost" onClick={onClear} disabled={pending || chat.messages.length === 0}>
             очистить историю
           </button>
+          <button
+            className="btn btn--ghost"
+            onClick={() => checkpoint.toggle()}
+            disabled={pending}
+            title="клонировать чат в новую ветку вместе с историей, настройками и памятью"
+          >
+            чекпоинт
+          </button>
           <button className="btn btn--ghost" onClick={onToggleSettings}>
             {settingsOpen ? 'скрыть настройки' : 'настройки'}
           </button>
@@ -46,6 +66,16 @@ export function ChatView({ chat, context, pending, settingsOpen, onSend, onClear
 
       <StatsBar chat={chat} />
       <ContextBar context={context} />
+      <FactsPanel facts={chat.facts} />
+
+      {checkpoint.open && (
+        <CheckpointForm
+          busy={checkpoint.busy}
+          error={checkpoint.error}
+          onSubmit={onCheckpoint}
+          onCancel={() => checkpoint.toggle()}
+        />
+      )}
 
       <div className="chat__body">
         {chat.messages.length === 0 && !pending && (

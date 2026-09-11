@@ -59,7 +59,7 @@ func (c *Client) Chat(ctx context.Context, p Provider, req Request) (Response, e
 		Stream:           false,
 		Temperature:      req.Temperature,
 		MaxTokens:        req.MaxTokens,
-		TopP:             req.TopP,
+		TopP:             neutralTopP(req.TopP),
 		FrequencyPenalty: req.FrequencyPenalty,
 		PresencePenalty:  req.PresencePenalty,
 		ResponseFormat:   responseFormat(req.JSONObject),
@@ -143,6 +143,19 @@ func (c *Client) do(ctx context.Context, p Provider, payload []byte) (Response, 
 		FinishReason: choice.FinishReason,
 		Usage:        parsed.Usage,
 	}, nil
+}
+
+// neutralTopP выбрасывает top_p из запроса, когда он ничего не меняет.
+//
+// Единица -- это «фильтра нет», то есть поведение по умолчанию. Слать такой параметр
+// незачем, а некоторые провайдеры (например Liquid за OpenRouter) на него отвечают
+// 400 «The top_p parameter is not supported». Ноль в wireRequest помечен omitempty
+// и в тело не попадает.
+func neutralTopP(topP float64) float64 {
+	if topP >= 1 {
+		return 0
+	}
+	return topP
 }
 
 func responseFormat(jsonObject bool) *wireRespFmt {

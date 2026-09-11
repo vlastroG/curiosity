@@ -54,7 +54,9 @@ type RunInput struct {
 	History []Message
 	// Summary -- пересказ свёрнутой части диалога. Пусто, если сжатия ещё не было
 	Summary string
-	Config  Config
+	// Facts -- key-value память чата, накопленная за весь диалог
+	Facts  []Fact
+	Config Config
 	// Last -- числа последнего состоявшегося вызова в этом чате. Нужны, чтобы
 	// посчитать заполненность окна контекста по факту, а не по оценке
 	Last LastTurn
@@ -80,6 +82,8 @@ type RunOutput struct {
 	HistoryMessages int `json:"historyMessages"`
 	// Compaction -- заполнено, если на этом ходе окно истории закрылось
 	Compaction *Compaction `json:"compaction,omitempty"`
+	// Facts -- заполнено, если на этом ходе обновлялась key-value память
+	Facts *FactsUpdate `json:"facts,omitempty"`
 }
 
 // ModelUnavailableError -- модель есть в каталоге, но её провайдеру не задан ключ.
@@ -128,7 +132,7 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 
 	// 3. Сборка контекста: system prompt, пересказ и сообщения окна.
 	stepStart = time.Now()
-	messages := buildMessages(question, summary, history, in.Config)
+	messages := buildMessages(question, summary, in.Facts, history, in.Config)
 	out.HistoryMessages = len(history)
 	trace.record(StepBuildContext, stepStart, true, fmt.Sprintf(
 		"%d %s в запросе, из них %d истории при окне %d%s",
@@ -174,7 +178,26 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	out.Warnings = warnings
 	trace.record(StepOutputPolicy, stepStart, true, outputDetail(warnings))
 
-	// 6. Судья -- необязательный этап. Его сбой не должен стоить пользователю ответа,
+	// 6. Обновление key-value памяти. Как и судья, этап необязательный и не должен
+	// стоить пользователю уже полученного ответа: сбой уходит в предупреждение.
+	if in.Config.StickyFacts {
+		stepStart = time.Now()
+		update, factsErr := a.updateFacts(ctx, model, provider, in.Facts, question, resp.Text)
+		if factsErr != nil {
+			trace.record(StepFacts, stepStart, false, factsErr.Error())
+			out.Warnings = append(out.Warnings, "память фактов не обновилась: "+factsErr.Error())
+		} else {
+			out.Facts = update
+			out.Calls++
+			out.TotalUSD += update.Cost.USD
+			trace.record(StepFacts, stepStart, true, fmt.Sprintf(
+				"%d %s в памяти, из них новых %d, обновлённых %d",
+				len(update.Facts), Plural(len(update.Facts), "факт", "факта", "фактов"),
+				update.Added, update.Changed))
+		}
+	}
+
+	// 7. Судья -- необязательный этап. Его сбой не должен стоить пользователю ответа,
 	// который уже получен и оплачен, поэтому ошибка уходит в трейс, а не наверх.
 	if in.Config.JudgeEnabled {
 		stepStart = time.Now()
@@ -219,13 +242,19 @@ func (a *Agent) Available(model Model) bool {
 //
 // История обрезается по HistoryDepth -- это и есть память агента. При нуле каждый
 // запрос уходит без контекста, и разницу хорошо видно на уточняющих вопросах.
-func buildMessages(question, summary string, history []Message, cfg Config) []llm.Message {
+func buildMessages(question, summary string, facts []Fact, history []Message, cfg Config) []llm.Message {
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt(cfg)}}
 
 	// пересказ уезжает отдельным system-сообщением сразу после промпта чата:
 	// это память агента, а не реплика собеседника
 	if strings.TrimSpace(summary) != "" {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: summaryPreamble + summary})
+	}
+
+	// следом key-value память: она собрана по всему диалогу, в том числе по той части,
+	// которую пересказ уже не покрывает
+	if cfg.StickyFacts && len(facts) > 0 {
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: factsPreamble + renderFacts(facts)})
 	}
 
 	for _, message := range history {
@@ -298,6 +327,19 @@ func recursiveNote(recursive bool) string {
 		return ", вместе с прошлым пересказом"
 	}
 	return ""
+}
+
+// renderFacts превращает память в текст для запроса.
+func renderFacts(facts []Fact) string {
+	var out strings.Builder
+	for _, fact := range facts {
+		out.WriteString("- ")
+		out.WriteString(fact.Key)
+		out.WriteString(": ")
+		out.WriteString(fact.Value)
+		out.WriteString("\n")
+	}
+	return out.String()
 }
 
 func summaryNote(summary string) string {

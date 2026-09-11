@@ -215,6 +215,17 @@ export function MessageItem({ message }) {
         </div>
       ))}
 
+      {meta?.facts && (
+        <div
+          className="turn-total"
+          title="память обновлена отдельным вызовом модели; в запрос она уедет со следующего хода"
+        >
+          память: {meta.facts.added > 0 && <>+{meta.facts.added} новых, </>}
+          {meta.facts.changed > 0 && <>{meta.facts.changed} обновлено, </>}
+          <span className="meta__cost">{formatUSD(meta.facts.cost?.usd)}</span>
+        </div>
+      )}
+
       {meta?.judge && <Judge judge={meta.judge} />}
 
       {answered && (

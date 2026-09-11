@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"agent-sprout/internal/agent"
 	"agent-sprout/internal/store"
@@ -125,7 +127,9 @@ func (d Deps) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 				invalid = err
 				return err
 			}
-			chat.Config = updated
+			// не присваиваем напрямую: снятая галочка фактов должна стереть
+			// накопленную память, и это правило живёт в одном месте
+			chat.ApplyConfig(updated)
 		}
 		return nil
 	})
@@ -148,6 +152,50 @@ func (d Deps) handleDeleteChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// checkpointRequest -- тело POST /api/chats/{id}/checkpoint.
+type checkpointRequest struct {
+	Tag string `json:"tag"`
+}
+
+// maxTagLength -- потолок длины тэга. Тэг живёт в строке списка чатов,
+// и простыня там всё сломает.
+const maxTagLength = 40
+
+// handleCheckpoint делает ветку диалога: копию чата с его историей, настройками
+// и памятью. Активным для интерфейса остаётся исходный чат -- ветка создаётся,
+// чтобы к ней вернуться, а не чтобы немедленно в неё уйти.
+func (d Deps) handleCheckpoint(w http.ResponseWriter, r *http.Request) {
+	var body checkpointRequest
+	if err := decodeJSON(w, r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "тело запроса не разобралось: "+err.Error())
+		return
+	}
+
+	tag := strings.TrimSpace(body.Tag)
+	if tag == "" {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "тэг ветки не может быть пустым")
+		return
+	}
+	if utf8.RuneCountInString(tag) > maxTagLength {
+		writeError(w, http.StatusBadRequest, codeBadRequest,
+			fmt.Sprintf("тэг длиннее %d символов не поместится в список чатов", maxTagLength))
+		return
+	}
+
+	branch, err := d.Store.Clone(r.PathValue("id"), tag)
+	if errors.Is(err, store.ErrTagTaken) {
+		// отдельный код, чтобы форма чекпоинта показала ошибку прямо у поля
+		writeError(w, http.StatusConflict, codeTagTaken, err.Error())
+		return
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, d.chatPayload(branch))
 }
 
 func (d Deps) handleClearMessages(w http.ResponseWriter, r *http.Request) {
@@ -182,6 +230,7 @@ type configPatch struct {
 	MaxWords         *int     `json:"maxWords"`
 	HistoryDepth     *int     `json:"historyDepth"`
 	SummarizeHistory *bool    `json:"summarizeHistory"`
+	StickyFacts      *bool    `json:"stickyFacts"`
 	JudgeEnabled     *bool    `json:"judgeEnabled"`
 	MaxInputChars    *int     `json:"maxInputChars"`
 }
@@ -219,6 +268,9 @@ func (p configPatch) apply(cfg agent.Config) agent.Config {
 	}
 	if p.SummarizeHistory != nil {
 		cfg.SummarizeHistory = *p.SummarizeHistory
+	}
+	if p.StickyFacts != nil {
+		cfg.StickyFacts = *p.StickyFacts
 	}
 	if p.JudgeEnabled != nil {
 		cfg.JudgeEnabled = *p.JudgeEnabled

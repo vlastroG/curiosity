@@ -30,7 +30,10 @@ type Config struct {
 	// SummarizeHistory -- сворачивать закрывшееся окно в саммари отдельным вызовом
 	// модели. Выключено -- окно на переходе просто теряется.
 	SummarizeHistory bool `json:"summarizeHistory"`
-	JudgeEnabled     bool `json:"judgeEnabled"`
+	// StickyFacts -- вести key-value память чата. В отличие от саммари она копится
+	// через весь диалог и переживает закрытие окна, но стоит вызова на каждом ходе.
+	StickyFacts  bool `json:"stickyFacts"`
+	JudgeEnabled bool `json:"judgeEnabled"`
 	// MaxInputChars -- потолок длины вопроса, проверяет входная политика.
 	MaxInputChars int `json:"maxInputChars"`
 }

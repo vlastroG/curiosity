@@ -24,6 +24,7 @@ const (
 	codeOutputPolicy = "output_policy"
 	codeProvider     = "provider"
 	codeOverflow     = "context_overflow"
+	codeTagTaken     = "tag_taken"
 	codeInternal     = "internal"
 )
 

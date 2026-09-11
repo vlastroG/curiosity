@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 
 // ErrNotFound -- чата с таким id нет.
 var ErrNotFound = errors.New("чат не найден")
+
+// ErrTagTaken -- такой тэг ветки уже занят. Тэги должны быть уникальными:
+// по ним ветки различают глазами.
+var ErrTagTaken = errors.New("такой тэг уже занят")
 
 // Store -- потокобезопасное хранилище чатов с записью снапшота на диск.
 type Store struct {
@@ -164,6 +169,9 @@ type Turn struct {
 	Input *InputMeta
 	// Answer -- ответ модели либо объяснение, почему его нет
 	Answer Message
+	// Facts -- обновлённая key-value память чата. nil означает «не трогать»:
+	// память могла не обновляться вовсе или её обновление могло не удаться
+	Facts []agent.Fact
 }
 
 // FinishTurn закрывает ход одной операцией.
@@ -196,6 +204,10 @@ func (s *Store) FinishTurn(id string, turn Turn) (Chat, error) {
 			chat.Messages[at] = boundary
 		}
 
+		if turn.Facts != nil {
+			chat.Facts = turn.Facts
+		}
+
 		turn.Answer.ID = newID()
 		turn.Answer.CreatedAt = now
 		chat.Messages = append(chat.Messages, turn.Answer)
@@ -213,11 +225,54 @@ func lastIndexOfKind(messages []Message, kind string) int {
 }
 
 // ClearMessages очищает историю, сохраняя настройки чата.
+//
+// Вместе с лентой уходит вся память: факты стираются явно, саммари -- само,
+// потому что хранится отметкой среди сообщений. Оставить память в пустом чате
+// значило бы получить агента, который всё ещё что-то про вас помнит.
 func (s *Store) ClearMessages(id string) (Chat, error) {
 	return s.Update(id, func(chat *Chat) error {
 		chat.Messages = []Message{}
+		chat.Facts = nil
 		return nil
 	})
+}
+
+// Clone создаёт ветку диалога: абсолютную копию чата в новой точке.
+//
+// История, настройки и память переезжают целиком -- меняются только идентификатор
+// и метки ветки. Тэг проверяется под тем же замком, что и вставка: иначе два
+// одновременных чекпоинта могут занять один и тот же тэг.
+func (s *Store) Clone(id, tag string) (Chat, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	source, ok := s.chats[id]
+	if !ok {
+		return Chat{}, ErrNotFound
+	}
+
+	for _, existing := range s.chats {
+		if strings.EqualFold(existing.Tag, tag) {
+			return Chat{}, ErrTagTaken
+		}
+	}
+
+	now := s.now()
+	branch := source.clone()
+	branch.ID = newID()
+	branch.Tag = tag
+	branch.ClonedAt = &now
+	branch.ParentID = source.ID
+	branch.CreatedAt = now
+	branch.UpdatedAt = now
+
+	s.chats[branch.ID] = &branch
+	s.order = append(s.order, branch.ID)
+
+	if err := s.persist(); err != nil {
+		return Chat{}, err
+	}
+	return branch.clone(), nil
 }
 
 // Delete удаляет чат вместе с историей.

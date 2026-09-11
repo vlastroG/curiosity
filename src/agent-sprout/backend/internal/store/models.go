@@ -160,12 +160,22 @@ type Meta struct {
 	FinishReason string              `json:"finishReason"`
 	Calls        int                 `json:"calls"`
 	Judge        *agent.JudgeVerdict `json:"judge,omitempty"`
-	Warnings     []string            `json:"warnings,omitempty"`
-	Trace        []agent.Step        `json:"trace,omitempty"`
+	// Facts -- метрики обновления памяти на этом ходе. Сам набор фактов сюда
+	// не копируется: он лежит на чате, и дублировать его в каждом сообщении незачем
+	Facts    *agent.FactsUpdate `json:"facts,omitempty"`
+	Warnings []string           `json:"warnings,omitempty"`
+	Trace    []agent.Step       `json:"trace,omitempty"`
 }
 
 // MetaFrom переносит результат прохода агента в метрики сообщения.
 func MetaFrom(out agent.RunOutput) *Meta {
+	var facts *agent.FactsUpdate
+	if out.Facts != nil {
+		trimmed := *out.Facts
+		trimmed.Facts = nil
+		facts = &trimmed
+	}
+
 	return &Meta{
 		Model:        out.Model,
 		Usage:        out.Usage,
@@ -176,19 +186,44 @@ func MetaFrom(out agent.RunOutput) *Meta {
 		FinishReason: out.FinishReason,
 		Calls:        out.Calls,
 		Judge:        out.Judge,
+		Facts:        facts,
 		Warnings:     out.Warnings,
 		Trace:        out.Trace,
 	}
 }
 
-// Chat -- чат целиком: настройки агента и вся история.
+// Chat -- чат целиком: настройки агента, память и вся история.
 type Chat struct {
-	ID        string       `json:"id"`
-	Title     string       `json:"title"`
-	Config    agent.Config `json:"config"`
-	Messages  []Message    `json:"messages"`
-	CreatedAt time.Time    `json:"createdAt"`
-	UpdatedAt time.Time    `json:"updatedAt"`
+	ID       string       `json:"id"`
+	Title    string       `json:"title"`
+	Config   agent.Config `json:"config"`
+	Messages []Message    `json:"messages"`
+	// Facts -- key-value память, накопленная за весь диалог. В отличие от саммари
+	// живёт не в ленте, а на чате: она переживает закрытие окна и копится дальше
+	Facts []agent.Fact `json:"facts,omitempty"`
+	// Tag -- метка ветки, задаётся при чекпоинте и дальше не меняется.
+	// Пусто у обычных чатов: клона от обычного чата отличают только метки ветки
+	Tag string `json:"tag,omitempty"`
+	// ClonedAt -- когда ветка отпочковалась от родителя
+	ClonedAt *time.Time `json:"clonedAt,omitempty"`
+	// ParentID -- из какого чата сделан клон. Нужен, чтобы показать дерево веток:
+	// без ссылки на родителя две ветки от одной точки не нарисовать
+	ParentID  string    `json:"parentId,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// ApplyConfig меняет настройки чата, обнуляя память там, где она перестала быть
+// осмысленной.
+//
+// Снятая галочка фактов стирает накопленное: пользователь именно так их и сбрасывает,
+// а держать невидимую память, которая никуда не уезжает, но ждёт своего часа, --
+// верный способ однажды удивиться.
+func (c *Chat) ApplyConfig(cfg agent.Config) {
+	if c.Config.StickyFacts && !cfg.StickyFacts {
+		c.Facts = nil
+	}
+	c.Config = cfg
 }
 
 // Summary -- строка списка чатов: без истории, но со сводкой по ней.
@@ -197,6 +232,11 @@ type Summary struct {
 	Title    string       `json:"title"`
 	Config   agent.Config `json:"config"`
 	Messages int          `json:"messages"`
+	// метки ветки: по ним список строит дерево и показывает, откуда чат взялся
+	Tag      string     `json:"tag,omitempty"`
+	ClonedAt *time.Time `json:"clonedAt,omitempty"`
+	ParentID string     `json:"parentId,omitempty"`
+	Facts    int        `json:"facts"`
 	// Вход и выход считаются раздельно: вход растёт с каждым ходом, выход нет,
 	// и на суммах эта разница особенно заметна
 	TotalIn   int       `json:"totalIn"`
@@ -300,6 +340,10 @@ func (c Chat) summary() Summary {
 		Title:     c.Title,
 		Config:    c.Config,
 		Messages:  len(c.Messages),
+		Tag:       c.Tag,
+		ClonedAt:  c.ClonedAt,
+		ParentID:  c.ParentID,
+		Facts:     len(c.Facts),
 		CreatedAt: c.CreatedAt,
 		UpdatedAt: c.UpdatedAt,
 	}
@@ -323,7 +367,14 @@ func (c Chat) summary() Summary {
 // не меняются, поэтому делить их между копиями безопасно.
 func (c Chat) clone() Chat {
 	copied := c
+
 	copied.Messages = make([]Message, len(c.Messages))
 	copy(copied.Messages, c.Messages)
+
+	if c.Facts != nil {
+		copied.Facts = make([]agent.Fact, len(c.Facts))
+		copy(copied.Facts, c.Facts)
+	}
+
 	return copied
 }

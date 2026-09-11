@@ -37,6 +37,7 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/chats/{id}", deps.handleGetChat)
 	mux.HandleFunc("PATCH /api/chats/{id}", deps.handlePatchChat)
 	mux.HandleFunc("DELETE /api/chats/{id}", deps.handleDeleteChat)
+	mux.HandleFunc("POST /api/chats/{id}/checkpoint", deps.handleCheckpoint)
 	mux.HandleFunc("POST /api/chats/{id}/messages", deps.handlePostMessage)
 	mux.HandleFunc("DELETE /api/chats/{id}/messages", deps.handleClearMessages)
 

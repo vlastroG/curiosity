@@ -312,6 +312,89 @@ body {
   cursor: help;
 }
 
+/* ---------- ветки диалога ---------- */
+
+.chat-row__branch {
+  color: var(--border-bright);
+  font-size: 11px;
+  line-height: 1;
+  margin-right: -2px;
+}
+.chat-row__tag {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border-bright);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+.checkpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.checkpoint__field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.checkpoint__field input {
+  flex: 1;
+  max-width: 320px;
+}
+.checkpoint__actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- key-value память ---------- */
+
+.facts {
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.facts__toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 11px;
+  cursor: pointer;
+}
+.facts__toggle:hover .facts__label {
+  color: var(--accent);
+}
+.facts__label {
+  color: var(--accent-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.facts__list {
+  margin: 6px 0 2px;
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 2px 12px;
+}
+/* каждая пара -- своя строка грида: ключ слева, значение справа */
+.facts__item {
+  display: contents;
+}
+.facts__item dt {
+  color: var(--accent-dim);
+}
+.facts__item dd {
+  margin: 0;
+  color: var(--text);
+}
+
 /* ---------- граница окна истории ---------- */
 
 .boundary {
@@ -588,6 +671,20 @@ body {
 .field__hint {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.settings__group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.settings__group-title {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
 }
 
 .presets {
