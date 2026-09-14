@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"agent-sprout/internal/agent"
 	"agent-sprout/internal/llm"
@@ -363,7 +364,6 @@ func TestCloneMakesAnIndependentBranch(t *testing.T) {
 	s, _ := Open("")
 
 	cfg := agent.DefaultConfig("deepseek-v4-flash")
-	cfg.StickyFacts = true
 	source, _ := s.Create("исходный", cfg)
 
 	if _, err := s.Append(source.ID,
@@ -373,10 +373,18 @@ func TestCloneMakesAnIndependentBranch(t *testing.T) {
 		t.Fatalf("подготовка: %v", err)
 	}
 	if _, err := s.Update(source.ID, func(chat *Chat) error {
-		chat.Facts = []agent.Fact{{Key: "имя", Value: "Влад"}}
+		chat.Tasks = []agent.Task{{
+			ID:     "t1",
+			Title:  "штукатурные работы",
+			Status: agent.TaskCollecting,
+			Requirements: []agent.Requirement{
+				{Key: "основание", Question: "из чего стены?", Value: "кирпич"},
+				{Key: "площадь", Question: "сколько квадратов?"},
+			},
+		}}
 		return nil
 	}); err != nil {
-		t.Fatalf("подготовка памяти: %v", err)
+		t.Fatalf("подготовка рабочей памяти: %v", err)
 	}
 
 	branch, err := s.Clone(source.ID, "ветка-а")
@@ -393,11 +401,18 @@ func TestCloneMakesAnIndependentBranch(t *testing.T) {
 	if branch.Tag != "ветка-а" || branch.ClonedAt == nil || branch.ParentID != source.ID {
 		t.Fatalf("метки ветки не проставлены: %+v", branch)
 	}
-	if len(branch.Messages) != 2 || len(branch.Facts) != 1 {
-		t.Fatalf("история и память должны переехать целиком: %+v", branch)
+	if len(branch.Messages) != 2 || len(branch.Tasks) != 1 {
+		t.Fatalf("история и задачи должны переехать целиком: %+v", branch)
 	}
-	if !branch.Config.StickyFacts {
-		t.Fatal("настройки должны переехать целиком")
+	// рабочая память ветки -- своя копия: уточнения в одной ветке не видны в другой
+	if _, err := s.Update(branch.ID, func(chat *Chat) error {
+		chat.Tasks[0].Requirements[1].Value = "40 м2"
+		return nil
+	}); err != nil {
+		t.Fatalf("уточнение в ветке: %v", err)
+	}
+	if origin, _ := s.Get(source.ID); origin.Tasks[0].Requirements[1].Value != "" {
+		t.Fatalf("рабочая память веток не должна быть общей: %+v", origin.Tasks[0].Requirements)
 	}
 
 	// ветки независимы: дописанное в одну не появляется в другой
@@ -446,26 +461,55 @@ func TestCloneOfCloneKeepsLineage(t *testing.T) {
 	}
 }
 
-func TestApplyConfigClearsFactsWhenTurnedOff(t *testing.T) {
-	cfg := agent.DefaultConfig("deepseek-v4-flash")
-	cfg.StickyFacts = true
+func TestActiveAndSolvedTasksAreSeparated(t *testing.T) {
+	closed := time.Now()
+	chat := Chat{Tasks: []agent.Task{
+		{ID: "t1", Title: "монолит", Status: agent.TaskDone, Summary: "итог монолита", ClosedAt: &closed},
+		{ID: "t2", Title: "брошенная", Status: agent.TaskCancelled, ClosedAt: &closed},
+		{ID: "t3", Title: "штукатурка", Status: agent.TaskCollecting},
+	}}
 
-	chat := Chat{Config: cfg, Facts: []agent.Fact{{Key: "имя", Value: "Влад"}}}
-
-	// правка, не касающаяся фактов, память не трогает
-	other := cfg
-	other.Temperature = 1.2
-	chat.ApplyConfig(other)
-	if len(chat.Facts) != 1 {
-		t.Fatalf("посторонняя настройка не должна стирать память: %+v", chat.Facts)
+	active := chat.ActiveTask()
+	if active == nil || active.ID != "t3" {
+		t.Fatalf("активной должна быть незакрытая задача: %+v", active)
 	}
 
-	// снятая галочка -- это и есть способ сбросить память
-	off := other
-	off.StickyFacts = false
-	chat.ApplyConfig(off)
-	if chat.Facts != nil {
-		t.Fatalf("снятая галочка должна стереть память: %+v", chat.Facts)
+	solved := chat.SolvedTasks()
+	if len(solved) != 1 || solved[0].ID != "t1" {
+		t.Fatalf("в память диалога идут только закрытые планом задачи: %+v", solved)
+	}
+}
+
+func TestCancelTaskFreesWorkingMemory(t *testing.T) {
+	s, _ := Open("")
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+
+	if _, err := s.Append(chat.ID, Message{Role: "user", Kind: KindQuestion, Content: "вопрос"}); err != nil {
+		t.Fatalf("подготовка: %v", err)
+	}
+	if _, err := s.Update(chat.ID, func(c *Chat) error {
+		c.Tasks = []agent.Task{{ID: "t1", Title: "штукатурка", Status: agent.TaskCollecting}}
+		return nil
+	}); err != nil {
+		t.Fatalf("подготовка задачи: %v", err)
+	}
+
+	updated, err := s.Update(chat.ID, func(c *Chat) error {
+		if !c.CancelTask(time.Now()) {
+			t.Fatal("активная задача должна была найтись")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("прерывание: %v", err)
+	}
+
+	if updated.ActiveTask() != nil {
+		t.Fatal("после прерывания активной задачи быть не должно")
+	}
+	// история диалога при этом не страдает: прерывается задача, а не разговор
+	if len(updated.Messages) != 1 {
+		t.Fatalf("история должна остаться: %+v", updated.Messages)
 	}
 }
 
@@ -473,7 +517,6 @@ func TestClearMessagesWipesMemory(t *testing.T) {
 	s, _ := Open("")
 
 	cfg := agent.DefaultConfig("deepseek-v4-flash")
-	cfg.StickyFacts = true
 	chat, _ := s.Create("чат", cfg)
 
 	if _, err := s.Append(chat.ID,
@@ -483,7 +526,7 @@ func TestClearMessagesWipesMemory(t *testing.T) {
 		t.Fatalf("подготовка: %v", err)
 	}
 	if _, err := s.Update(chat.ID, func(c *Chat) error {
-		c.Facts = []agent.Fact{{Key: "имя", Value: "Влад"}}
+		c.Tasks = []agent.Task{{ID: "t1", Title: "штукатурка", Status: agent.TaskDone, Summary: "итог"}}
 		return nil
 	}); err != nil {
 		t.Fatalf("подготовка памяти: %v", err)
@@ -494,14 +537,14 @@ func TestClearMessagesWipesMemory(t *testing.T) {
 		t.Fatalf("очистка: %v", err)
 	}
 
-	if len(cleared.Messages) != 0 || cleared.Facts != nil {
-		t.Fatalf("очистка должна стирать и ленту, и память: %+v", cleared)
+	if len(cleared.Messages) != 0 || cleared.Tasks != nil {
+		t.Fatalf("очистка должна стирать и ленту, и задачи: %+v", cleared)
 	}
 	// саммари уходит вместе с лентой, потому что хранится отметкой среди сообщений
 	if window := cleared.Window(); window.Summary != "" {
 		t.Fatalf("саммари должно уйти вместе с лентой: %q", window.Summary)
 	}
-	if !cleared.Config.StickyFacts {
+	if cleared.Config.Model != cfg.Model {
 		t.Fatal("настройки при очистке сохраняются")
 	}
 }

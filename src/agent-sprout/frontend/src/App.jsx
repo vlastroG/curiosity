@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from './api.js';
 import { ChatList } from './components/ChatList.jsx';
 import { ChatView } from './components/ChatView.jsx';
+import { KnowledgePanel } from './components/KnowledgePanel.jsx';
 import { SettingsPanel } from './components/SettingsPanel.jsx';
 
 /**
@@ -26,6 +27,13 @@ export default function App() {
   const [checkpointOpen, setCheckpointOpen] = useState(false);
   const [checkpointBusy, setCheckpointBusy] = useState(false);
   const [checkpointError, setCheckpointError] = useState(null);
+  // долговременная память общая для всех чатов, поэтому живёт на уровне приложения
+  const [knowledge, setKnowledge] = useState([]);
+  const [knowledgePresets, setKnowledgePresets] = useState([]);
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [knowledgeBusy, setKnowledgeBusy] = useState(false);
+  const [knowledgeError, setKnowledgeError] = useState(null);
+  const [taskBusy, setTaskBusy] = useState(false);
   const [error, setError] = useState(null);
   const [settingsError, setSettingsError] = useState(null);
 
@@ -37,9 +45,15 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [loadedCatalog, list] = await Promise.all([api.catalog(), api.listChats()]);
+        const [loadedCatalog, list, memory] = await Promise.all([
+          api.catalog(),
+          api.listChats(),
+          api.knowledge(),
+        ]);
         setCatalog(loadedCatalog);
         setChats(list.chats);
+        setKnowledge(memory.knowledge ?? []);
+        setKnowledgePresets(memory.presets ?? []);
         if (list.chats.length > 0) setActiveId(list.chats[0].id);
       } catch (caught) {
         fail(caught);
@@ -80,7 +94,7 @@ export default function App() {
               title: updated.title,
               config: updated.config,
               messages: updated.messages.length,
-              facts: updated.facts?.length ?? 0,
+              tasks: updated.tasks?.length ?? 0,
               totalIn: updated.messages.reduce((sum, m) => sum + (m.input?.tokens ?? 0), 0),
               totalOut: updated.messages.reduce(
                 (sum, m) => sum + (m.meta?.usage?.completion_tokens ?? 0),
@@ -158,6 +172,42 @@ export default function App() {
     }
   }
 
+  async function handleCancelTask() {
+    setError(null);
+    setTaskBusy(true);
+    try {
+      const result = await api.cancelTask(chat.id);
+      applyChat(result.chat, result.context);
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setTaskBusy(false);
+    }
+  }
+
+  // --- долговременная память ---
+
+  async function withKnowledge(action, done) {
+    setKnowledgeError(null);
+    setKnowledgeBusy(true);
+    try {
+      await action();
+      const memory = await api.knowledge();
+      setKnowledge(memory.knowledge ?? []);
+      setKnowledgePresets(memory.presets ?? []);
+      done?.();
+    } catch (caught) {
+      setKnowledgeError(caught.message);
+    } finally {
+      setKnowledgeBusy(false);
+    }
+  }
+
+  const handleAddKnowledge = (body, done) => withKnowledge(() => api.addKnowledge(body), done);
+  const handleUpdateKnowledge = (id, body, done) =>
+    withKnowledge(() => api.updateKnowledge(id, body), done);
+  const handleDeleteKnowledge = (id) => withKnowledge(() => api.deleteKnowledge(id));
+
   async function handleClear() {
     setError(null);
     try {
@@ -197,8 +247,15 @@ export default function App() {
     <div className="app">
       <header className="app__header">
         <h1>agent sprout</h1>
-        <span className="app__note">неделя 2 · день 10 — стратегии контекста</span>
+        <span className="app__note">помощник строителя · день 11 — модель памяти</span>
         {error && <span className="app__error">{error}</span>}
+        <button
+          className="btn btn--ghost app__knowledge"
+          onClick={() => setKnowledgeOpen((open) => !open)}
+          title="долговременная память: знания, общие для всех чатов"
+        >
+          знания {knowledge.length > 0 ? `(${knowledge.length})` : ''}
+        </button>
       </header>
 
       <div className="app__body">
@@ -224,10 +281,17 @@ export default function App() {
                 error: checkpointError,
                 toggle: toggleCheckpoint,
               }}
+              task={{
+                active: chat.tasks?.find((item) => item.status === 'collecting') ?? null,
+                solved: (chat.tasks ?? []).filter((item) => item.status === 'done' && item.summary),
+                knowledge: knowledgeFor(chat, knowledge),
+                busy: taskBusy,
+              }}
               onSend={handleSend}
               onClear={handleClear}
               onToggleSettings={() => setSettingsOpen((open) => !open)}
               onCheckpoint={handleCheckpoint}
+              onCancelTask={handleCancelTask}
             />
             {settingsOpen && (
               <SettingsPanel
@@ -246,9 +310,33 @@ export default function App() {
             <p className="muted">Выберите чат слева или создайте новый.</p>
           </main>
         )}
+        {knowledgeOpen && (
+          <KnowledgePanel
+            items={knowledge}
+            presets={knowledgePresets}
+            busy={knowledgeBusy}
+            error={knowledgeError}
+            onCreate={handleAddKnowledge}
+            onUpdate={handleUpdateKnowledge}
+            onDelete={handleDeleteKnowledge}
+            onClose={() => setKnowledgeOpen(false)}
+          />
+        )}
       </div>
     </div>
   );
+}
+
+/**
+ * Знания, отобранные под активную задачу чата.
+ *
+ * Задача хранит только идентификаторы: тексты знаний могут поменяться, и показывать
+ * надо актуальные, а не копию на момент отбора.
+ */
+function knowledgeFor(chat, knowledge) {
+  const active = chat.tasks?.find((item) => item.status === 'collecting');
+  if (!active?.knowledgeIds?.length) return [];
+  return knowledge.filter((item) => active.knowledgeIds.includes(item.id));
 }
 
 /** Строка списка из полного чата -- чтобы не ходить за списком повторно. */
@@ -258,7 +346,7 @@ function summaryOf(chat) {
     title: chat.title,
     config: chat.config,
     messages: chat.messages.length,
-    facts: chat.facts?.length ?? 0,
+    tasks: chat.tasks?.length ?? 0,
     tag: chat.tag,
     clonedAt: chat.clonedAt,
     parentId: chat.parentId,

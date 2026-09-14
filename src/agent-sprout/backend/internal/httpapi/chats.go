@@ -28,8 +28,7 @@ func (d Deps) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"models":  models,
-		"presets": agent.Presets,
+		"models": models,
 		"defaults": map[string]any{
 			"config": agent.DefaultConfig(d.DefaultModel),
 		},
@@ -220,7 +219,6 @@ func writeStoreError(w http.ResponseWriter, err error) {
 // чтобы отличить "поле не прислали" от "прислали ноль".
 type configPatch struct {
 	Model            *string  `json:"model"`
-	SystemPrompt     *string  `json:"systemPrompt"`
 	Temperature      *float64 `json:"temperature"`
 	MaxTokens        *int     `json:"maxTokens"`
 	TopP             *float64 `json:"topP"`
@@ -230,7 +228,6 @@ type configPatch struct {
 	MaxWords         *int     `json:"maxWords"`
 	HistoryDepth     *int     `json:"historyDepth"`
 	SummarizeHistory *bool    `json:"summarizeHistory"`
-	StickyFacts      *bool    `json:"stickyFacts"`
 	JudgeEnabled     *bool    `json:"judgeEnabled"`
 	MaxInputChars    *int     `json:"maxInputChars"`
 }
@@ -238,9 +235,6 @@ type configPatch struct {
 func (p configPatch) apply(cfg agent.Config) agent.Config {
 	if p.Model != nil {
 		cfg.Model = *p.Model
-	}
-	if p.SystemPrompt != nil {
-		cfg.SystemPrompt = *p.SystemPrompt
 	}
 	if p.Temperature != nil {
 		cfg.Temperature = *p.Temperature
@@ -268,9 +262,6 @@ func (p configPatch) apply(cfg agent.Config) agent.Config {
 	}
 	if p.SummarizeHistory != nil {
 		cfg.SummarizeHistory = *p.SummarizeHistory
-	}
-	if p.StickyFacts != nil {
-		cfg.StickyFacts = *p.StickyFacts
 	}
 	if p.JudgeEnabled != nil {
 		cfg.JudgeEnabled = *p.JudgeEnabled

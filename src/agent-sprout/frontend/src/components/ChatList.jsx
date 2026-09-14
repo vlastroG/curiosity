@@ -71,7 +71,7 @@ function ChatRow({ chat, depth, active, onSelect, onDelete }) {
         <span className="chat-row__meta">
           {chat.clonedAt && <>{branchTime(chat.clonedAt)} · </>}
           {chat.config.model.split('/').pop()} · {chat.messages} сообщ.
-          {chat.facts > 0 && <> · {chat.facts} фактов</>} · {formatUSD(chat.totalUsd)}
+          {chat.tasks > 0 && <> · {chat.tasks} задач</>} · {formatUSD(chat.totalUsd)}
         </span>
       </div>
 

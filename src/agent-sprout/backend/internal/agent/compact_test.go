@@ -44,8 +44,8 @@ func TestCompactionDoesNotHappenBeforeWindowIsFull(t *testing.T) {
 	if out.Compaction != nil {
 		t.Fatalf("окно не заполнено, сжимать рано: %+v", out.Compaction)
 	}
-	if len(fake.calls) != 1 {
-		t.Fatalf("должен быть один вызов, получено %d", len(fake.calls))
+	if calls := fake.answerCalls(); len(calls) != 1 {
+		t.Fatalf("должен быть один содержательный вызов, получено %d", len(calls))
 	}
 	if out.HistoryMessages != 3 {
 		t.Fatalf("окно должно уехать целиком, отправлено %d", out.HistoryMessages)
@@ -68,8 +68,8 @@ func TestCompactionReplacesWindowWithSummary(t *testing.T) {
 		t.Fatalf("неожиданная ошибка: %v", err)
 	}
 
-	if len(fake.calls) != 2 {
-		t.Fatalf("сжатие плюс основной вызов -- это два обращения, получено %d", len(fake.calls))
+	if calls := fake.answerCalls(); len(calls) != 2 {
+		t.Fatalf("сжатие плюс основной вызов -- это два обращения, получено %d", len(calls))
 	}
 	if out.Compaction == nil || out.Compaction.Covered != 4 {
 		t.Fatalf("отметка о сжатии не заполнена: %+v", out.Compaction)
@@ -78,13 +78,15 @@ func TestCompactionReplacesWindowWithSummary(t *testing.T) {
 		t.Fatal("первое сжатие не рекурсивное: прошлого пересказа не было")
 	}
 
-	// в основной запрос уехали system, пересказ и вопрос -- самих сообщений окна нет
-	sent := fake.calls[1].Messages
-	if len(sent) != 3 {
-		t.Fatalf("ожидались system, пересказ и вопрос, отправлено %d: %+v", len(sent), sent)
+	// в основной запрос уехал пересказ, а самих сообщений окна нет
+	sent := fake.answerCalls()[1].Messages
+	if !containsContent(sent, "Влад") {
+		t.Fatalf("пересказ должен уехать в запрос: %+v", sent)
 	}
-	if sent[1].Role != llm.RoleSystem || !strings.Contains(sent[1].Content, "Влад") {
-		t.Fatalf("пересказ должен уехать вторым system-сообщением: %+v", sent[1])
+	for _, message := range sent {
+		if message.Content == "сообщение окна" {
+			t.Fatalf("после сжатия сообщений окна в запросе быть не должно: %+v", sent)
+		}
 	}
 	if out.HistoryMessages != 0 {
 		t.Fatalf("после сжатия сообщений окна не остаётся, отправлено %d", out.HistoryMessages)
@@ -117,12 +119,13 @@ func TestCompactionIsRecursiveOnSecondPass(t *testing.T) {
 	}
 
 	// прошлый пересказ обязан попасть на вход сжатия, иначе память первого окна теряется
-	payload := fake.calls[0].Messages[1].Content
+	payload := fake.answerCalls()[0].Messages[1].Content
 	if !strings.Contains(payload, "пересказ первого окна") {
 		t.Fatalf("в сжатие не попал прошлый пересказ: %q", payload)
 	}
-	if fake.calls[0].Temperature != 0 {
-		t.Fatalf("пересказ должен собираться на нулевой температуре, получено %v", fake.calls[0].Temperature)
+	if fake.answerCalls()[0].Temperature != 0 {
+		t.Fatalf("пересказ должен собираться на нулевой температуре, получено %v",
+			fake.answerCalls()[0].Temperature)
 	}
 }
 
@@ -139,8 +142,8 @@ func TestCompactionDisabledDropsWindowButKeepsSummary(t *testing.T) {
 		t.Fatalf("неожиданная ошибка: %v", err)
 	}
 
-	if len(fake.calls) != 1 {
-		t.Fatalf("без сжатия лишнего вызова быть не должно, получено %d", len(fake.calls))
+	if calls := fake.answerCalls(); len(calls) != 1 {
+		t.Fatalf("без сжатия лишнего вызова быть не должно, получено %d", len(calls))
 	}
 	if out.Compaction == nil || !out.Compaction.Dropped || out.Compaction.Covered != 4 {
 		t.Fatalf("отметка об отбрасывании не заполнена: %+v", out.Compaction)
@@ -151,8 +154,7 @@ func TestCompactionDisabledDropsWindowButKeepsSummary(t *testing.T) {
 
 	// уже оплаченная память при этом остаётся: тумблер решает судьбу окна,
 	// а не судьбу накопленного пересказа
-	sent := fake.calls[0].Messages
-	if len(sent) != 3 || !strings.Contains(sent[1].Content, "накопленный раньше") {
+	if sent := fake.answerCalls()[0].Messages; !containsContent(sent, "накопленный раньше") {
 		t.Fatalf("сохранённый пересказ должен уехать в запрос: %+v", sent)
 	}
 }
@@ -180,8 +182,8 @@ func TestCompactionFailureCancelsTheTurn(t *testing.T) {
 		t.Fatalf("ошибка провайдера должна оставаться распознаваемой: %v", err)
 	}
 
-	if len(fake.calls) != 1 {
-		t.Fatalf("основного вызова быть не должно, обращений: %d", len(fake.calls))
+	if calls := fake.answerCalls(); len(calls) != 1 {
+		t.Fatalf("основного вызова быть не должно, обращений: %d", len(calls))
 	}
 	if out.Compaction != nil {
 		t.Fatalf("несостоявшееся сжатие нечего записывать: %+v", out.Compaction)
@@ -201,7 +203,17 @@ func TestCompactionRejectsEmptySummary(t *testing.T) {
 	if err == nil {
 		t.Fatal("пустой пересказ должен отменять ход")
 	}
-	if len(fake.calls) != 1 {
-		t.Fatalf("основного вызова быть не должно, обращений: %d", len(fake.calls))
+	if calls := fake.answerCalls(); len(calls) != 1 {
+		t.Fatalf("основного вызова быть не должно, обращений: %d", len(calls))
 	}
+}
+
+// containsContent -- есть ли среди сообщений запроса подстрока.
+func containsContent(messages []llm.Message, needle string) bool {
+	for _, message := range messages {
+		if strings.Contains(message.Content, needle) {
+			return true
+		}
+	}
+	return false
 }

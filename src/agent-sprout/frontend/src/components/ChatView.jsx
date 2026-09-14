@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckpointForm } from './CheckpointForm.jsx';
 import { ContextBar } from './ContextBar.jsx';
-import { FactsPanel } from './FactsPanel.jsx';
+import { TaskStatusBar } from './TaskStatusBar.jsx';
 import { MessageItem } from './MessageItem.jsx';
 import { StatsBar } from './StatsBar.jsx';
 
@@ -12,7 +12,9 @@ export function ChatView({
   pending,
   settingsOpen,
   checkpoint,
+  task,
   onSend,
+  onCancelTask,
   onClear,
   onToggleSettings,
   onCheckpoint,
@@ -27,6 +29,10 @@ export function ChatView({
   // окно контекста кончилось: новый вопрос физически некуда положить.
   // Бэкенд отказал бы и сам, но глухая кнопка честнее потраченного запроса
   const full = Boolean(context?.full);
+
+  const placeholder = task.active
+    ? 'Ответьте на вопросы агента. Enter — отправить, Shift+Enter — перенос строки'
+    : 'Опишите, какие строительные работы нужно выполнить';
 
   const send = () => {
     const text = input.trim();
@@ -66,7 +72,13 @@ export function ChatView({
 
       <StatsBar chat={chat} />
       <ContextBar context={context} />
-      <FactsPanel facts={chat.facts} />
+      <TaskStatusBar
+        task={task.active}
+        solved={task.solved}
+        knowledge={task.knowledge}
+        busy={pending || task.busy}
+        onCancel={onCancelTask}
+      />
 
       {checkpoint.open && (
         <CheckpointForm
@@ -107,7 +119,7 @@ export function ChatView({
           placeholder={
             full
               ? 'Окно контекста заполнено — очистите историю или уменьшите max_tokens'
-              : 'Запрос агенту. Enter — отправить, Shift+Enter — перенос строки'
+              : placeholder
           }
           value={input}
           onChange={(event) => setInput(event.target.value)}

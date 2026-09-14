@@ -51,27 +51,6 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
           <span className="field__hint">{modelHint(catalog, draft.model)}</span>
         </label>
 
-        <div className="field">
-          <span className="field__label">system prompt</span>
-          <div className="presets">
-            {catalog.presets.map((preset) => (
-              <button
-                key={preset.id}
-                className="btn btn--chip"
-                title={preset.hint}
-                onClick={() => set({ systemPrompt: preset.prompt })}
-              >
-                {preset.title}
-              </button>
-            ))}
-          </div>
-          <textarea
-            rows={8}
-            value={draft.systemPrompt}
-            onChange={(event) => set({ systemPrompt: event.target.value })}
-          />
-        </div>
-
         <Slider
           label="temperature"
           hint="разброс ответов: 0 — предсказуемо, 2 — свободно"
@@ -143,9 +122,9 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
         <div className="settings__group">
           <span className="settings__group-title">стратегии контекста</span>
           <span className="field__hint">
-            Три способа помнить диалог, не отправляя его целиком. Работают в любых
-            сочетаниях: окно режет, пересказ сжимает свёрнутое, факты переживают и то
-            и другое. Третья стратегия — ветки — живёт кнопкой «чекпоинт» в шапке чата.
+            Краткосрочная память: окно последних сообщений и пересказ того, что из него
+            выпало. Рабочая память задачи и долговременный справочник знаний живут
+            отдельно и настроек не требуют. Ветки диалога — кнопка «чекпоинт» в шапке чата.
           </span>
         </div>
 
@@ -175,24 +154,6 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
               копится, а запрос не растёт. Выключено — окно на переходе просто теряется.
               Стоит одного дополнительного вызова модели на каждые {draft.historyDepth}{' '}
               сообщений
-            </span>
-          </span>
-        </label>
-
-        <label className="field field--check">
-          <input
-            type="checkbox"
-            checked={draft.stickyFacts}
-            onChange={(event) => set({ stickyFacts: event.target.checked })}
-          />
-          <span>
-            <span className="field__label">sticky facts</span>
-            <span className="field__hint">
-              отдельный блок «ключ — значение»: цели, ограничения, решения,
-              договорённости. В отличие от пересказа копится через весь чат и переживает
-              закрытие окна. Обновляется отдельным вызовом модели после каждой пары
-              вопрос-ответ — то есть стоит вызова на каждом ходе, а не раз в{' '}
-              {draft.historyDepth} сообщений. Снятая галочка стирает накопленное
             </span>
           </span>
         </label>

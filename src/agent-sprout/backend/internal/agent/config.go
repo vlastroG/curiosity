@@ -12,7 +12,6 @@ const (
 // и целиком хранится вместе с чатом, так что у каждого чата свой характер.
 type Config struct {
 	Model            string  `json:"model"`
-	SystemPrompt     string  `json:"systemPrompt"`
 	Temperature      float64 `json:"temperature"`
 	MaxTokens        int     `json:"maxTokens"`
 	TopP             float64 `json:"topP"`
@@ -30,10 +29,7 @@ type Config struct {
 	// SummarizeHistory -- сворачивать закрывшееся окно в саммари отдельным вызовом
 	// модели. Выключено -- окно на переходе просто теряется.
 	SummarizeHistory bool `json:"summarizeHistory"`
-	// StickyFacts -- вести key-value память чата. В отличие от саммари она копится
-	// через весь диалог и переживает закрытие окна, но стоит вызова на каждом ходе.
-	StickyFacts  bool `json:"stickyFacts"`
-	JudgeEnabled bool `json:"judgeEnabled"`
+	JudgeEnabled     bool `json:"judgeEnabled"`
 	// MaxInputChars -- потолок длины вопроса, проверяет входная политика.
 	MaxInputChars int `json:"maxInputChars"`
 }
@@ -62,7 +58,6 @@ const (
 func DefaultConfig(defaultModel string) Config {
 	return Config{
 		Model:          defaultModel,
-		SystemPrompt:   Presets[0].Prompt,
 		Temperature:    defaultTemperature,
 		MaxTokens:      defaultMaxTokens,
 		TopP:           defaultTopP,

@@ -6,6 +6,7 @@
 package store
 
 import (
+	"strings"
 	"time"
 
 	"agent-sprout/internal/agent"
@@ -160,22 +161,18 @@ type Meta struct {
 	FinishReason string              `json:"finishReason"`
 	Calls        int                 `json:"calls"`
 	Judge        *agent.JudgeVerdict `json:"judge,omitempty"`
-	// Facts -- метрики обновления памяти на этом ходе. Сам набор фактов сюда
-	// не копируется: он лежит на чате, и дублировать его в каждом сообщении незачем
-	Facts    *agent.FactsUpdate `json:"facts,omitempty"`
-	Warnings []string           `json:"warnings,omitempty"`
-	Trace    []agent.Step       `json:"trace,omitempty"`
+	// Memory -- снимок трёх слоёв памяти, ушедших в этот запрос
+	Memory agent.MemorySnapshot `json:"memory"`
+	// Decision -- что агент сделал на этом ходе
+	Decision agent.Decision `json:"decision,omitempty"`
+	// Overrides -- что страж переходов поправил в заявке диспетчера
+	Overrides []string     `json:"overrides,omitempty"`
+	Warnings  []string     `json:"warnings,omitempty"`
+	Trace     []agent.Step `json:"trace,omitempty"`
 }
 
 // MetaFrom переносит результат прохода агента в метрики сообщения.
 func MetaFrom(out agent.RunOutput) *Meta {
-	var facts *agent.FactsUpdate
-	if out.Facts != nil {
-		trimmed := *out.Facts
-		trimmed.Facts = nil
-		facts = &trimmed
-	}
-
 	return &Meta{
 		Model:        out.Model,
 		Usage:        out.Usage,
@@ -186,7 +183,9 @@ func MetaFrom(out agent.RunOutput) *Meta {
 		FinishReason: out.FinishReason,
 		Calls:        out.Calls,
 		Judge:        out.Judge,
-		Facts:        facts,
+		Memory:       out.Memory,
+		Decision:     out.Decision,
+		Overrides:    out.Overrides,
 		Warnings:     out.Warnings,
 		Trace:        out.Trace,
 	}
@@ -198,9 +197,9 @@ type Chat struct {
 	Title    string       `json:"title"`
 	Config   agent.Config `json:"config"`
 	Messages []Message    `json:"messages"`
-	// Facts -- key-value память, накопленная за весь диалог. В отличие от саммари
-	// живёт не в ленте, а на чате: она переживает закрытие окна и копится дальше
-	Facts []agent.Fact `json:"facts,omitempty"`
+	// Tasks -- задачи этого чата. Активная держит рабочую память, закрытые --
+	// пересказы, из которых складывается краткосрочная память диалога
+	Tasks []agent.Task `json:"tasks,omitempty"`
 	// Tag -- метка ветки, задаётся при чекпоинте и дальше не меняется.
 	// Пусто у обычных чатов: клона от обычного чата отличают только метки ветки
 	Tag string `json:"tag,omitempty"`
@@ -220,10 +219,58 @@ type Chat struct {
 // а держать невидимую память, которая никуда не уезжает, но ждёт своего часа, --
 // верный способ однажды удивиться.
 func (c *Chat) ApplyConfig(cfg agent.Config) {
-	if c.Config.StickyFacts && !cfg.StickyFacts {
-		c.Facts = nil
-	}
 	c.Config = cfg
+}
+
+// ActiveTask -- задача, которая сейчас в работе, либо nil.
+//
+// Активная задача всегда одна: правило «один вид работ за раз» держится не только
+// промптом, но и формой данных.
+func (c Chat) ActiveTask() *agent.Task {
+	for i := len(c.Tasks) - 1; i >= 0; i-- {
+		if c.Tasks[i].Active() {
+			task := c.Tasks[i]
+			return &task
+		}
+	}
+	return nil
+}
+
+// SolvedTasks -- закрытые планом задачи этого чата: краткосрочная память диалога.
+//
+// Прерванные сюда не попадают: у них нет итога, на который можно сослаться.
+func (c Chat) SolvedTasks() []agent.Task {
+	solved := make([]agent.Task, 0, len(c.Tasks))
+	for _, task := range c.Tasks {
+		if task.Status == agent.TaskDone && strings.TrimSpace(task.Summary) != "" {
+			solved = append(solved, task)
+		}
+	}
+	return solved
+}
+
+// UpsertTask сохраняет состояние задачи после хода агента.
+func (c *Chat) UpsertTask(task agent.Task) {
+	for i := range c.Tasks {
+		if c.Tasks[i].ID == task.ID {
+			c.Tasks[i] = task
+			return
+		}
+	}
+	c.Tasks = append(c.Tasks, task)
+}
+
+// CancelTask прерывает активную задачу: рабочая память освобождается,
+// история диалога остаётся нетронутой.
+func (c *Chat) CancelTask(closedAt time.Time) bool {
+	for i := len(c.Tasks) - 1; i >= 0; i-- {
+		if c.Tasks[i].Active() {
+			c.Tasks[i].Status = agent.TaskCancelled
+			c.Tasks[i].ClosedAt = &closedAt
+			return true
+		}
+	}
+	return false
 }
 
 // Summary -- строка списка чатов: без истории, но со сводкой по ней.
@@ -236,7 +283,7 @@ type Summary struct {
 	Tag      string     `json:"tag,omitempty"`
 	ClonedAt *time.Time `json:"clonedAt,omitempty"`
 	ParentID string     `json:"parentId,omitempty"`
-	Facts    int        `json:"facts"`
+	Tasks    int        `json:"tasks"`
 	// Вход и выход считаются раздельно: вход растёт с каждым ходом, выход нет,
 	// и на суммах эта разница особенно заметна
 	TotalIn   int       `json:"totalIn"`
@@ -343,7 +390,7 @@ func (c Chat) summary() Summary {
 		Tag:       c.Tag,
 		ClonedAt:  c.ClonedAt,
 		ParentID:  c.ParentID,
-		Facts:     len(c.Facts),
+		Tasks:     len(c.Tasks),
 		CreatedAt: c.CreatedAt,
 		UpdatedAt: c.UpdatedAt,
 	}
@@ -371,9 +418,14 @@ func (c Chat) clone() Chat {
 	copied.Messages = make([]Message, len(c.Messages))
 	copy(copied.Messages, c.Messages)
 
-	if c.Facts != nil {
-		copied.Facts = make([]agent.Fact, len(c.Facts))
-		copy(copied.Facts, c.Facts)
+	// задачи копируются вместе с рабочей памятью: ветка продолжает сбор с того же
+	// места, но дальше расходится с исходным чатом
+	if c.Tasks != nil {
+		copied.Tasks = make([]agent.Task, len(c.Tasks))
+		copy(copied.Tasks, c.Tasks)
+		for i := range copied.Tasks {
+			copied.Tasks[i].Requirements = append([]agent.Requirement(nil), c.Tasks[i].Requirements...)
+		}
 	}
 
 	return copied

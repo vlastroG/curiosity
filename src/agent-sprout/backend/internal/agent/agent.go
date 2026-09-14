@@ -54,9 +54,13 @@ type RunInput struct {
 	History []Message
 	// Summary -- пересказ свёрнутой части диалога. Пусто, если сжатия ещё не было
 	Summary string
-	// Facts -- key-value память чата, накопленная за весь диалог
-	Facts  []Fact
-	Config Config
+	// Task -- активная задача чата, если она есть. Рабочая память живёт в ней
+	Task *Task
+	// SolvedTasks -- решённые задачи этого диалога: краткосрочная память
+	SolvedTasks []Task
+	// Knowledge -- справочник долговременной памяти целиком; диспетчер отбирает нужное
+	Knowledge []KnowledgeItem
+	Config    Config
 	// Last -- числа последнего состоявшегося вызова в этом чате. Нужны, чтобы
 	// посчитать заполненность окна контекста по факту, а не по оценке
 	Last LastTurn
@@ -82,8 +86,48 @@ type RunOutput struct {
 	HistoryMessages int `json:"historyMessages"`
 	// Compaction -- заполнено, если на этом ходе окно истории закрылось
 	Compaction *Compaction `json:"compaction,omitempty"`
-	// Facts -- заполнено, если на этом ходе обновлялась key-value память
-	Facts *FactsUpdate `json:"facts,omitempty"`
+	// Decision -- что агент сделал на этом ходе после проверки стражем
+	Decision Decision `json:"decision"`
+	// Task -- состояние задачи после хода. nil, если задача так и не завелась
+	Task *Task `json:"task,omitempty"`
+	// Overrides -- что страж поправил в заявке диспетчера
+	Overrides []string `json:"overrides,omitempty"`
+	// Memory -- снимок трёх слоёв памяти, ушедших в этот запрос
+	Memory MemorySnapshot `json:"memory"`
+	// Routing -- метрики служебного вызова диспетчера
+	Routing *ServiceCall `json:"routing,omitempty"`
+	// TaskSummary -- метрики вызова, закрывшего задачу пересказом
+	TaskSummary *ServiceCall `json:"taskSummary,omitempty"`
+}
+
+// ServiceCall -- метрики служебного вызова модели (диспетчер, пересказ задачи).
+type ServiceCall struct {
+	Usage     llm.Usage `json:"usage"`
+	Cost      Cost      `json:"cost"`
+	LatencyMs int       `json:"latencyMs"`
+}
+
+// MemorySnapshot -- что именно уехало в запрос из каждого слоя памяти.
+//
+// Ради этого снимка всё и затевалось: пользователь должен видеть, что попало
+// в долговременную, рабочую и краткосрочную память, а не верить на слово.
+type MemorySnapshot struct {
+	// долговременная: отобранные знания
+	Knowledge []KnowledgeRef `json:"knowledge,omitempty"`
+	// рабочая: чеклист задачи на момент ответа
+	TaskTitle    string        `json:"taskTitle,omitempty"`
+	TaskStatus   TaskStatus    `json:"taskStatus,omitempty"`
+	Requirements []Requirement `json:"requirements,omitempty"`
+	// краткосрочная: память диалога
+	SolvedTasks     []SolvedRef `json:"solvedTasks,omitempty"`
+	WindowSummary   bool        `json:"windowSummary"`
+	HistoryMessages int         `json:"historyMessages"`
+}
+
+// SolvedRef -- решённая задача в снимке памяти.
+type SolvedRef struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // ModelUnavailableError -- модель есть в каталоге, но её провайдеру не задан ключ.
@@ -123,23 +167,58 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		return out, err
 	}
 
-	// 2. Управление контекстом: если окно истории заполнилось, оно закрывается.
+	// 2. Машина состояний: диспетчер разбирает сообщение, страж разрешает переход.
+	//
+	// Сбой здесь отменяет ход, как и сбой сжатия: без состояния нечего собирать
+	// и нечего планировать, а отвечать наугад в домене, где ошибка стоит денег
+	// и материалов, нельзя.
+	stepStart = time.Now()
+	claim, routerResp, err := a.route(ctx, model, provider, in, question)
+	if err != nil {
+		trace.record(StepRouting, stepStart, false, err.Error())
+		out.Trace = trace.steps
+		return out, fmt.Errorf("разбор состояния задачи не удался: %w", err)
+	}
+	out.Routing = &ServiceCall{
+		Usage:     routerResp.Usage,
+		Cost:      model.Cost(routerResp.Usage, a.now()),
+		LatencyMs: routerResp.LatencyMs,
+	}
+
+	verdict := Guard(in.Task, in.SolvedTasks, in.Knowledge, claim, newTaskID)
+	out.Decision = verdict.Decision
+	out.Task = verdict.Task
+	out.Overrides = verdict.Overrides
+	out.Warnings = append(out.Warnings, verdict.Overrides...)
+	trace.record(StepRouting, stepStart, true, routingDetail(claim, verdict))
+
+	// 3. Управление контекстом: если окно истории заполнилось, оно закрывается.
 	history, summary, err := a.manageContext(ctx, &out, trace, model, provider, in)
 	if err != nil {
 		out.Trace = trace.steps
 		return out, err
 	}
 
-	// 3. Сборка контекста: system prompt, пересказ и сообщения окна.
+	// 4. Сборка контекста: три слоя памяти плюс инструкция под решение стража.
 	stepStart = time.Now()
-	messages := buildMessages(question, summary, in.Facts, history, in.Config)
+	parts := contextParts{
+		Summary:       summary,
+		Knowledge:     verdict.Knowledge,
+		Task:          verdict.Task,
+		Solved:        in.SolvedTasks,
+		Decision:      verdict.Decision,
+		RelatedTaskID: verdict.RelatedTaskID,
+		History:       history,
+	}
+	messages := buildMessages(question, parts, in.Config)
 	out.HistoryMessages = len(history)
+	out.Memory = snapshotMemory(parts, summary, len(history))
 	trace.record(StepBuildContext, stepStart, true, fmt.Sprintf(
-		"%d %s в запросе, из них %d истории при окне %d%s",
+		"%d %s в запросе: знаний %d, истории %d, решённых задач %d%s",
 		len(messages), Plural(len(messages), "сообщение", "сообщения", "сообщений"),
-		out.HistoryMessages, in.Config.HistoryDepth, summaryNote(summary)))
+		len(verdict.Knowledge), out.HistoryMessages, len(in.SolvedTasks), summaryNote(summary)))
 
-	// 4. Вызов модели.
+	// 5. Вызов модели.
 	stepStart = time.Now()
 	resp, err := a.llm.Chat(ctx, provider, llm.Request{
 		Model:            model.ID,
@@ -165,7 +244,7 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		fmt.Sprintf("%d -> %d токенов, finish_reason=%s",
 			resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.FinishReason))
 
-	// 5. Выходная политика.
+	// 6. Выходная политика.
 	stepStart = time.Now()
 	warnings, err := checkOutput(resp.Text, resp, in.Config)
 	if err != nil {
@@ -178,26 +257,31 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	out.Warnings = warnings
 	trace.record(StepOutputPolicy, stepStart, true, outputDetail(warnings))
 
-	// 6. Обновление key-value памяти. Как и судья, этап необязательный и не должен
-	// стоить пользователю уже полученного ответа: сбой уходит в предупреждение.
-	if in.Config.StickyFacts {
+	// 7. Закрытие задачи пересказом. Сбой не отменяет ход: план уже выдан и оплачен,
+	// а без пересказа диалог просто потеряет память об этой задаче.
+	if verdict.Closing && verdict.Task != nil {
 		stepStart = time.Now()
-		update, factsErr := a.updateFacts(ctx, model, provider, in.Facts, question, resp.Text)
-		if factsErr != nil {
-			trace.record(StepFacts, stepStart, false, factsErr.Error())
-			out.Warnings = append(out.Warnings, "память фактов не обновилась: "+factsErr.Error())
+		summaryText, summaryResp, summaryErr := a.summarizeTask(ctx, model, provider, *verdict.Task, resp.Text)
+		if summaryErr != nil {
+			trace.record(StepTaskSummary, stepStart, false, summaryErr.Error())
+			out.Warnings = append(out.Warnings, "пересказ задачи не собрался: "+summaryErr.Error())
 		} else {
-			out.Facts = update
+			out.Task.Summary = summaryText
 			out.Calls++
-			out.TotalUSD += update.Cost.USD
-			trace.record(StepFacts, stepStart, true, fmt.Sprintf(
-				"%d %s в памяти, из них новых %d, обновлённых %d",
-				len(update.Facts), Plural(len(update.Facts), "факт", "факта", "фактов"),
-				update.Added, update.Changed))
+			cost := model.Cost(summaryResp.Usage, a.now())
+			out.TotalUSD += cost.USD
+			out.TaskSummary = &ServiceCall{
+				Usage:     summaryResp.Usage,
+				Cost:      cost,
+				LatencyMs: summaryResp.LatencyMs,
+			}
+			trace.record(StepTaskSummary, stepStart, true, fmt.Sprintf(
+				"задача %q закрыта, пересказ на %d токенов",
+				verdict.Task.Title, summaryResp.Usage.CompletionTokens))
 		}
 	}
 
-	// 7. Судья -- необязательный этап. Его сбой не должен стоить пользователю ответа,
+	// 8. Судья -- необязательный этап. Его сбой не должен стоить пользователю ответа,
 	// который уже получен и оплачен, поэтому ошибка уходит в трейс, а не наверх.
 	if in.Config.JudgeEnabled {
 		stepStart = time.Now()
@@ -236,32 +320,6 @@ func (a *Agent) resolve(modelID string) (Model, llm.Provider, error) {
 func (a *Agent) Available(model Model) bool {
 	provider, ok := a.providers[model.Provider]
 	return ok && provider.Available()
-}
-
-// buildMessages собирает тело диалога: system prompt, хвост истории и текущий вопрос.
-//
-// История обрезается по HistoryDepth -- это и есть память агента. При нуле каждый
-// запрос уходит без контекста, и разницу хорошо видно на уточняющих вопросах.
-func buildMessages(question, summary string, facts []Fact, history []Message, cfg Config) []llm.Message {
-	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt(cfg)}}
-
-	// пересказ уезжает отдельным system-сообщением сразу после промпта чата:
-	// это память агента, а не реплика собеседника
-	if strings.TrimSpace(summary) != "" {
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: summaryPreamble + summary})
-	}
-
-	// следом key-value память: она собрана по всему диалогу, в том числе по той части,
-	// которую пересказ уже не покрывает
-	if cfg.StickyFacts && len(facts) > 0 {
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: factsPreamble + renderFacts(facts)})
-	}
-
-	for _, message := range history {
-		messages = append(messages, llm.Message{Role: message.Role, Content: message.Content})
-	}
-
-	return append(messages, llm.Message{Role: llm.RoleUser, Content: question})
 }
 
 // manageContext закрывает окно истории, если оно заполнилось.
@@ -329,19 +387,6 @@ func recursiveNote(recursive bool) string {
 	return ""
 }
 
-// renderFacts превращает память в текст для запроса.
-func renderFacts(facts []Fact) string {
-	var out strings.Builder
-	for _, fact := range facts {
-		out.WriteString("- ")
-		out.WriteString(fact.Key)
-		out.WriteString(": ")
-		out.WriteString(fact.Value)
-		out.WriteString("\n")
-	}
-	return out.String()
-}
-
 func summaryNote(summary string) string {
 	if strings.TrimSpace(summary) != "" {
 		return ", плюс пересказ свёрнутой части"
@@ -351,7 +396,9 @@ func summaryNote(summary string) string {
 
 // systemPrompt дополняет промпт чата требованиями, которые следуют из настроек.
 func systemPrompt(cfg Config) string {
-	prompt := cfg.SystemPrompt
+	// доменная роль скрыта и неизменяема: настройки могут добавить требования
+	// к оформлению ответа, но не отменить, кем агент является
+	prompt := DomainPrompt
 
 	if cfg.MaxWords > 0 {
 		prompt += fmt.Sprintf("\n\nУложись в %d слов.", cfg.MaxWords)

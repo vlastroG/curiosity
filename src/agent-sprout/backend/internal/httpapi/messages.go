@@ -51,12 +51,14 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, runErr := d.Agent.Run(r.Context(), agent.RunInput{
-		Question: body.Content,
-		History:  window.Messages,
-		Summary:  window.Summary,
-		Facts:    chat.Facts,
-		Config:   chat.Config,
-		Last:     last,
+		Question:    body.Content,
+		History:     window.Messages,
+		Summary:     window.Summary,
+		Task:        chat.ActiveTask(),
+		SolvedTasks: chat.SolvedTasks(),
+		Knowledge:   d.Store.KnowledgeItems(),
+		Config:      chat.Config,
+		Last:        last,
 	})
 
 	if runErr != nil {
@@ -83,7 +85,7 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		chat, err = d.Store.FinishTurn(chatID, store.Turn{
 			Boundary: store.CompactionMessage(out.Compaction, out.Model),
 			Input:    input,
-			Facts:    updatedFacts(out),
+			Task:     out.Task,
 			Answer: store.Message{
 				Role:    llm.RoleAssistant,
 				Kind:    kind,
@@ -103,7 +105,7 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	chat, err = d.Store.FinishTurn(chatID, store.Turn{
 		Boundary: store.CompactionMessage(out.Compaction, out.Model),
 		Input:    store.InputFrom(out),
-		Facts:    updatedFacts(out),
+		Task:     out.Task,
 		Answer: store.Message{
 			Role:    llm.RoleAssistant,
 			Kind:    store.KindAnswer,
@@ -119,14 +121,4 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	payload := d.chatPayload(chat)
 	payload["message"] = chat.Messages[len(chat.Messages)-1]
 	writeJSON(w, http.StatusOK, payload)
-}
-
-// updatedFacts достаёт обновлённую память из результата хода.
-//
-// nil означает «память не трогать»: факты выключены либо их обновление не удалось.
-func updatedFacts(out agent.RunOutput) []agent.Fact {
-	if out.Facts == nil {
-		return nil
-	}
-	return out.Facts.Facts
 }

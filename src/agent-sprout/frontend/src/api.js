@@ -66,6 +66,12 @@ export const api = {
   sendMessage: (id, content) => request(`/chats/${id}/messages`, { method: 'POST', body: { content } }),
   clearMessages: (id) => request(`/chats/${id}/messages`, { method: 'DELETE' }),
   checkpoint: (id, tag) => request(`/chats/${id}/checkpoint`, { method: 'POST', body: { tag } }),
+  cancelTask: (id) => request(`/chats/${id}/task/cancel`, { method: 'POST', body: {} }),
+
+  knowledge: () => request('/knowledge'),
+  addKnowledge: (body) => request('/knowledge', { method: 'POST', body }),
+  updateKnowledge: (id, body) => request(`/knowledge/${id}`, { method: 'PATCH', body }),
+  deleteKnowledge: (id) => request(`/knowledge/${id}`, { method: 'DELETE' }),
 };
 
 /** Форматирование чисел, общее для всех метрик интерфейса. */

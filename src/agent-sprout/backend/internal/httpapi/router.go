@@ -40,6 +40,13 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/chats/{id}/checkpoint", deps.handleCheckpoint)
 	mux.HandleFunc("POST /api/chats/{id}/messages", deps.handlePostMessage)
 	mux.HandleFunc("DELETE /api/chats/{id}/messages", deps.handleClearMessages)
+	mux.HandleFunc("POST /api/chats/{id}/task/cancel", deps.handleCancelTask)
+
+	// долговременная память общая для всех чатов, поэтому и маршруты у неё свои
+	mux.HandleFunc("GET /api/knowledge", deps.handleListKnowledge)
+	mux.HandleFunc("POST /api/knowledge", deps.handleCreateKnowledge)
+	mux.HandleFunc("PATCH /api/knowledge/{id}", deps.handleUpdateKnowledge)
+	mux.HandleFunc("DELETE /api/knowledge/{id}", deps.handleDeleteKnowledge)
 
 	// всё остальное под /api -- явная 404 в том же формате, что и прочие ошибки,
 	// иначе клиент получит HTML страницы вместо JSON

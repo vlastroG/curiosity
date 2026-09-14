@@ -25,6 +25,8 @@ const (
 	codeProvider     = "provider"
 	codeOverflow     = "context_overflow"
 	codeTagTaken     = "tag_taken"
+	codeTitleTaken   = "title_taken"
+	codeNoActiveTask = "no_active_task"
 	codeInternal     = "internal"
 )
 

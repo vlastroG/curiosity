@@ -18,7 +18,8 @@ const (
 	StepBuildContext = "сборка контекста"
 	StepLLM          = "вызов модели"
 	StepOutputPolicy = "output policy"
-	StepFacts        = "факты"
+	StepRouting      = "машина состояний"
+	StepTaskSummary  = "закрытие задачи"
 	StepJudge        = "судья"
 )
 

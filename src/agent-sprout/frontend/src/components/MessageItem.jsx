@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { BoundaryMessage } from './BoundaryMessage.jsx';
+import { MemoryDisclosure } from './MemoryDisclosure.jsx';
 import { Markdown } from '../markdown.jsx';
 import { formatSeconds, formatTokens, formatUSD } from '../api.js';
 
@@ -215,17 +216,6 @@ export function MessageItem({ message }) {
         </div>
       ))}
 
-      {meta?.facts && (
-        <div
-          className="turn-total"
-          title="память обновлена отдельным вызовом модели; в запрос она уедет со следующего хода"
-        >
-          память: {meta.facts.added > 0 && <>+{meta.facts.added} новых, </>}
-          {meta.facts.changed > 0 && <>{meta.facts.changed} обновлено, </>}
-          <span className="meta__cost">{formatUSD(meta.facts.cost?.usd)}</span>
-        </div>
-      )}
-
       {meta?.judge && <Judge judge={meta.judge} />}
 
       {answered && (
@@ -233,6 +223,8 @@ export function MessageItem({ message }) {
           итого за ход {formatUSD(meta.totalUsd)}
         </div>
       )}
+
+      {answered && <MemoryDisclosure memory={meta.memory} decision={meta.decision} />}
 
       {meta?.trace?.length > 0 && <Trace trace={meta.trace} />}
     </div>

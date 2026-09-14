@@ -29,13 +29,17 @@ type Store struct {
 	// order хранит порядок создания: map порядка не даёт, а список чатов
 	// должен быть стабильным между запросами
 	order []string
-	path  string
-	now   func() time.Time
+	// knowledge -- долговременная память: общая для всех чатов и живёт отдельно
+	// от них, потому что не принадлежит ни одному разговору
+	knowledge []Knowledge
+	path      string
+	now       func() time.Time
 }
 
 // snapshot -- формат файла на диске.
 type snapshot struct {
-	Chats []Chat `json:"chats"`
+	Chats     []Chat      `json:"chats"`
+	Knowledge []Knowledge `json:"knowledge,omitempty"`
 }
 
 // Open поднимает хранилище из файла. Отсутствующий файл -- не ошибка: это первый запуск.
@@ -69,9 +73,14 @@ func Open(path string) (*Store, error) {
 		s.chats[chat.ID] = &chat
 		s.order = append(s.order, chat.ID)
 	}
+	s.knowledge = loaded.Knowledge
 
 	return s, nil
 }
+
+// Now -- часы хранилища. Вынесены наружу, чтобы вызывающий проставлял время теми же
+// часами, что и сам стор, и тесты могли их подменить.
+func (s *Store) Now() time.Time { return s.now() }
 
 // List возвращает сводки по всем чатам в порядке создания.
 func (s *Store) List() []Summary {
@@ -169,9 +178,9 @@ type Turn struct {
 	Input *InputMeta
 	// Answer -- ответ модели либо объяснение, почему его нет
 	Answer Message
-	// Facts -- обновлённая key-value память чата. nil означает «не трогать»:
-	// память могла не обновляться вовсе или её обновление могло не удаться
-	Facts []agent.Fact
+	// Task -- состояние задачи после хода. nil означает «не трогать»:
+	// задача могла не завестись или ход мог закончиться отказом
+	Task *agent.Task
 }
 
 // FinishTurn закрывает ход одной операцией.
@@ -204,8 +213,8 @@ func (s *Store) FinishTurn(id string, turn Turn) (Chat, error) {
 			chat.Messages[at] = boundary
 		}
 
-		if turn.Facts != nil {
-			chat.Facts = turn.Facts
+		if turn.Task != nil {
+			chat.UpsertTask(*turn.Task)
 		}
 
 		turn.Answer.ID = newID()
@@ -226,13 +235,13 @@ func lastIndexOfKind(messages []Message, kind string) int {
 
 // ClearMessages очищает историю, сохраняя настройки чата.
 //
-// Вместе с лентой уходит вся память: факты стираются явно, саммари -- само,
-// потому что хранится отметкой среди сообщений. Оставить память в пустом чате
-// значило бы получить агента, который всё ещё что-то про вас помнит.
+// Вместе с лентой уходят оба слоя памяти чата: задачи с их рабочей памятью стираются
+// явно, пересказ окна -- сам, потому что хранится отметкой среди сообщений.
+// Долговременная память не трогается: она общая и живёт вне чатов.
 func (s *Store) ClearMessages(id string) (Chat, error) {
 	return s.Update(id, func(chat *Chat) error {
 		chat.Messages = []Message{}
-		chat.Facts = nil
+		chat.Tasks = nil
 		return nil
 	})
 }
@@ -304,7 +313,10 @@ func (s *Store) persist() error {
 		return nil
 	}
 
-	all := snapshot{Chats: make([]Chat, 0, len(s.order))}
+	all := snapshot{
+		Chats:     make([]Chat, 0, len(s.order)),
+		Knowledge: s.knowledge,
+	}
 	for _, id := range s.order {
 		if chat, ok := s.chats[id]; ok {
 			all.Chats = append(all.Chats, *chat)

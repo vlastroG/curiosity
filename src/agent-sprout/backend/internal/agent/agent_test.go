@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,23 +12,66 @@ import (
 
 // fakeLLM -- подставной клиент моделей. Благодаря ему весь конвейер агента
 // прогоняется без сети, без ключей и без денег.
+//
+// Вызов диспетчера отвечается отдельно от очереди responses: он случается на каждом
+// ходе, и заставлять каждый тест про сжатие или судью выдумывать решение машины
+// состояний значило бы утопить суть теста в подготовке.
 type fakeLLM struct {
 	calls     []llm.Request
 	responses []llm.Response
+	// routing -- чем отвечать на вызов диспетчера; пусто -- канонический сбор данных
+	routing string
+	// routerErr -- сбой именно диспетчера; err роняет только содержательные вызовы
+	routerErr error
 	err       error
 }
 
+// defaultRouting -- заявка «продолжаем сбор», которая ничего не меняет в состоянии.
+const defaultRouting = `{"decision":"collect","answers":[],"reason":"тест"}`
+
 func (f *fakeLLM) Chat(_ context.Context, _ llm.Provider, req llm.Request) (llm.Response, error) {
 	f.calls = append(f.calls, req)
+
+	if isRouterCall(req) {
+		if f.routerErr != nil {
+			return llm.Response{}, f.routerErr
+		}
+		routing := f.routing
+		if routing == "" {
+			routing = defaultRouting
+		}
+		return llm.Response{Text: routing, FinishReason: "stop"}, nil
+	}
+
 	if f.err != nil {
 		return llm.Response{}, f.err
 	}
+
 	if len(f.responses) == 0 {
 		return llm.Response{Text: "ответ", FinishReason: "stop"}, nil
 	}
 	resp := f.responses[0]
 	f.responses = f.responses[1:]
 	return resp, nil
+}
+
+// isRouterCall -- узнаём служебный вызов диспетчера по его промпту.
+func isRouterCall(req llm.Request) bool {
+	return len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "Ты — диспетчер")
+}
+
+// answerCalls -- вызовы, которые не были обращением к диспетчеру.
+//
+// Тестам про сжатие, судью и политики важен порядок содержательных вызовов,
+// а диспетчер в нём только мешает.
+func (f *fakeLLM) answerCalls() []llm.Request {
+	calls := make([]llm.Request, 0, len(f.calls))
+	for _, call := range f.calls {
+		if !isRouterCall(call) {
+			calls = append(calls, call)
+		}
+	}
+	return calls
 }
 
 func newTestAgent(fake *fakeLLM) *Agent {
@@ -85,8 +129,9 @@ func TestRunHappyPath(t *testing.T) {
 	if out.Calls != 1 {
 		t.Fatalf("без судьи должен быть ровно один вызов, получено %d", out.Calls)
 	}
-	if len(out.Trace) != 4 {
-		t.Fatalf("ожидались четыре шага трейса, получено %d: %+v", len(out.Trace), out.Trace)
+	// входная политика, машина состояний, сборка контекста, вызов, выходная политика
+	if len(out.Trace) != 5 {
+		t.Fatalf("ожидались пять шагов трейса, получено %d: %+v", len(out.Trace), out.Trace)
 	}
 	// 1000*0.014 + 2000*0.44 + 500*1.32 = 1554 за миллион токенов, время пиковое
 	if diff := out.Cost.USD - 0.001554; diff > 1e-9 || diff < -1e-9 {
@@ -97,7 +142,7 @@ func TestRunHappyPath(t *testing.T) {
 	}
 }
 
-func TestRunSendsSystemPromptAndWholeWindow(t *testing.T) {
+func TestRunSendsDomainPromptAndWholeWindow(t *testing.T) {
 	fake := &fakeLLM{}
 	cfg := testConfig()
 	cfg.HistoryDepth = 10
@@ -117,20 +162,21 @@ func TestRunSendsSystemPromptAndWholeWindow(t *testing.T) {
 		t.Fatalf("неожиданная ошибка: %v", err)
 	}
 
-	sent := fake.calls[0].Messages
-	// system + всё окно + текущий вопрос: резать хвост агенту больше не нужно,
-	// окно ему приезжает уже отрезанным по границе
-	if len(sent) != 6 {
-		t.Fatalf("ожидались 6 сообщений, отправлено %d: %+v", len(sent), sent)
+	sent := fake.answerCalls()[0].Messages
+
+	// доменная роль всегда первая и не редактируется из настроек
+	if sent[0].Role != llm.RoleSystem || !strings.Contains(sent[0].Content, "помощник начинающего строителя") {
+		t.Fatalf("первым должен идти доменный промпт, получено %+v", sent[0])
 	}
-	if sent[0].Role != llm.RoleSystem {
-		t.Fatalf("первым должен идти system, получено %q", sent[0].Role)
+
+	// окно уезжает целиком: резать хвост агенту больше не нужно, оно приезжает
+	// уже отрезанным по границе
+	if sent[len(sent)-1].Content != "третий" {
+		t.Fatalf("последним должен идти текущий вопрос, получено %q", sent[len(sent)-1].Content)
 	}
-	if sent[1].Content != "первый" || sent[4].Content != "второй ответ" {
-		t.Fatalf("окно должно уехать целиком, получено %+v", sent[1:5])
-	}
-	if sent[5].Content != "третий" {
-		t.Fatalf("последним должен идти текущий вопрос, получено %q", sent[5].Content)
+	window := sent[len(sent)-5 : len(sent)-1]
+	if window[0].Content != "первый" || window[3].Content != "второй ответ" {
+		t.Fatalf("окно должно уехать целиком, получено %+v", window)
 	}
 }
 
@@ -150,15 +196,18 @@ func TestRunWithoutHistoryDepthSendsOnlyQuestion(t *testing.T) {
 		t.Fatalf("неожиданная ошибка: %v", err)
 	}
 
-	if sent := fake.calls[0].Messages; len(sent) != 2 {
-		t.Fatalf("при нулевом окне должны уйти system и вопрос, получено %+v", sent)
+	sent := fake.answerCalls()[0].Messages
+	for _, message := range sent {
+		if message.Role == llm.RoleUser && message.Content == "первый" {
+			t.Fatalf("при нулевом окне истории быть не должно: %+v", sent)
+		}
 	}
 	if out.Compaction != nil {
 		t.Fatal("при нулевом окне сжимать нечего, отметка не нужна")
 	}
 }
 
-func TestRunWithJudgeMakesTwoCalls(t *testing.T) {
+func TestRunWithJudgeAddsOneCall(t *testing.T) {
 	fake := &fakeLLM{responses: []llm.Response{
 		{Text: "четыре", FinishReason: "stop"},
 		{Text: `{"score": 5, "verdict": "точный ответ"}`, FinishReason: "stop"},
@@ -175,20 +224,21 @@ func TestRunWithJudgeMakesTwoCalls(t *testing.T) {
 		t.Fatalf("неожиданная ошибка: %v", err)
 	}
 
-	if len(fake.calls) != 2 || out.Calls != 2 {
-		t.Fatalf("с судьёй должно быть два вызова, получено %d", len(fake.calls))
+	answers := fake.answerCalls()
+	if len(answers) != 2 || out.Calls != 2 {
+		t.Fatalf("с судьёй должно быть два содержательных вызова, получено %d", len(answers))
 	}
 	if out.Judge == nil || out.Judge.Score != 5 {
 		t.Fatalf("вердикт судьи не разобрался: %+v", out.Judge)
 	}
-	if !fake.calls[1].JSONObject {
+	if !answers[1].JSONObject {
 		t.Fatal("судья должен запрашивать json_object")
 	}
-	if fake.calls[1].Temperature != 0 {
-		t.Fatalf("судья должен работать на нулевой температуре, получено %v", fake.calls[1].Temperature)
+	if answers[1].Temperature != 0 {
+		t.Fatalf("судья должен работать на нулевой температуре, получено %v", answers[1].Temperature)
 	}
-	if len(out.Trace) != 5 {
-		t.Fatalf("с судьёй в трейсе пять шагов, получено %d", len(out.Trace))
+	if len(out.Trace) != 6 {
+		t.Fatalf("с судьёй в трейсе шесть шагов, получено %d", len(out.Trace))
 	}
 }
 
