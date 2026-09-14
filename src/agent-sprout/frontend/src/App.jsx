@@ -247,7 +247,16 @@ export default function App() {
     <div className="app">
       <header className="app__header">
         <h1>agent sprout</h1>
-        <span className="app__note">помощник строителя · день 11 — модель памяти</span>
+        <span
+          className="app__note"
+          title={
+            'Агент ведёт одну задачу за раз: заводит её по вашему описанию, вопросами ' +
+            'собирает исходные данные, показывает собранное на сверку и выдаёт ' +
+            'пошаговый план с расчётом материалов.'
+          }
+        >
+          помощник начинающего строителя — от исходных данных до пошагового плана работ
+        </span>
         {error && <span className="app__error">{error}</span>}
         <button
           className="btn btn--ghost app__knowledge"
