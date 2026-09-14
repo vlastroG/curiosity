@@ -67,9 +67,9 @@ func (d Deps) handleCreateChat(w http.ResponseWriter, r *http.Request) {
 	cfg := agent.DefaultConfig(d.DefaultModel)
 	if body.Config != nil {
 		cfg = body.Config.apply(cfg)
-		// бюджет вывода всегда от модели, а не от модели по умолчанию: у бесплатной
-		// потолок в двадцать раз ниже, и чужое значение её не прошло бы
-		cfg.MaxTokens = agent.MaxTokensFor(cfg.Model)
+		// бюджет вывода подтягивается под выбранную модель, а не под модель
+		// по умолчанию -- если его не задали явно
+		cfg.MaxTokens = agent.MaxTokensAfterSwitch(d.DefaultModel, cfg.Model, cfg.MaxTokens)
 	}
 	if err := cfg.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
@@ -222,9 +222,9 @@ func writeStoreError(w http.ResponseWriter, err error) {
 type configPatch struct {
 	Model       *string  `json:"model"`
 	Temperature *float64 `json:"temperature"`
-	// maxTokens здесь нет намеренно: бюджет вывода выводится из модели,
-	// см. Chat.ApplyConfig
-	HistoryDepth  *int `json:"historyDepth"`
+	MaxTokens   *int     `json:"maxTokens"`
+	// historyDepth здесь нет намеренно: окно истории -- предохранитель, а не настройка,
+	// см. комментарий у agent.Config.HistoryDepth
 	MaxInputChars *int `json:"maxInputChars"`
 }
 
@@ -235,8 +235,8 @@ func (p configPatch) apply(cfg agent.Config) agent.Config {
 	if p.Temperature != nil {
 		cfg.Temperature = *p.Temperature
 	}
-	if p.HistoryDepth != nil {
-		cfg.HistoryDepth = *p.HistoryDepth
+	if p.MaxTokens != nil {
+		cfg.MaxTokens = *p.MaxTokens
 	}
 	if p.MaxInputChars != nil {
 		cfg.MaxInputChars = *p.MaxInputChars

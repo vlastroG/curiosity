@@ -11,12 +11,16 @@ import "fmt"
 type Config struct {
 	Model       string  `json:"model"`
 	Temperature float64 `json:"temperature"`
-	// MaxTokens не редактируется руками: он выводится из модели и пересчитывается
-	// при её смене. Наружу отдаётся, чтобы интерфейс показывал бюджет вывода
+	// MaxTokens -- бюджет вывода. Значение по умолчанию приходит из модели,
+	// но человек вправе с ним спорить: длину плана он знает лучше нас
 	MaxTokens int `json:"maxTokens"`
 	// HistoryDepth -- размер окна истории: сколько сообщений уезжает в модель как есть.
 	// Когда окно заполняется, оно закрывается -- сворачивается в саммари, -- и отсчёт
-	// начинается заново. 0 -- памяти нет вовсе, каждый запрос уходит без контекста.
+	// начинается заново.
+	//
+	// В интерфейс не выведен и снаружи не меняется: это не настройка, а предохранитель
+	// на случай, когда переписка по одной задаче разрастается. Ноль здесь означает
+	// "памяти нет вовсе" -- режим для тестов, а не для пользователя.
 	HistoryDepth int `json:"historyDepth"`
 	// MaxInputChars -- потолок длины вопроса, проверяет входная политика.
 	MaxInputChars int `json:"maxInputChars"`
@@ -26,7 +30,7 @@ type Config struct {
 // из каталога моделей, см. DefaultConfig.
 const (
 	defaultTemperature   = 0.7
-	defaultHistoryDepth  = 10
+	defaultHistoryDepth  = 20
 	defaultMaxInputChars = 4000
 )
 
@@ -59,6 +63,22 @@ func MaxTokensFor(modelID string) int {
 		return 4096
 	}
 	return model.DefaultMaxTokens
+}
+
+// MaxTokensAfterSwitch -- каким станет бюджет вывода после смены модели.
+//
+// Значение, которое пользователь не трогал, следует за моделью: иначе бюджет
+// бесплатной модели уехал бы на рассуждающую, где его съедает рассуждение,
+// и чат снова молчал бы из коробки. Введённое руками сохраняется -- но обрезается
+// по потолку новой модели, иначе настройки просто не прошли бы проверку.
+func MaxTokensAfterSwitch(from, to string, current int) int {
+	if current == MaxTokensFor(from) {
+		return MaxTokensFor(to)
+	}
+	if model, ok := FindModel(to); ok && current > model.MaxOutputTokens {
+		return model.MaxOutputTokens
+	}
+	return current
 }
 
 // Validate проверяет настройки целиком. Вызывается при создании чата и при каждом

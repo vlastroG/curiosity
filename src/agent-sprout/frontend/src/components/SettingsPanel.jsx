@@ -23,10 +23,12 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
 
   const set = (patch) => setDraft((prev) => ({ ...prev, ...patch }));
 
-  // бюджет вывода выводится из модели, и пересчитывает его сервер. Но показать
-  // новое число надо сразу при выборе модели, а не после «применить»: рядом написано
-  // «подставляется под модель», и неподвижная цифра выглядит как обман
-  const chooseModel = (model) => set({ model, maxTokens: budgetOf(catalog, model) });
+  // при смене модели бюджет вывода ведёт себя так же, как на сервере: нетронутый
+  // дефолт идёт за моделью, введённое руками сохраняется и лишь обрезается по потолку.
+  // Повторяем правило здесь, чтобы число поменялось сразу, а не после «применить»;
+  // последнее слово всё равно за сервером -- он возвращает итоговый конфиг
+  const chooseModel = (model) =>
+    set({ model, maxTokens: budgetAfterSwitch(catalog, draft.model, model, draft.maxTokens) });
 
   return (
     <aside className="settings">
@@ -66,34 +68,26 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
           onChange={(temperature) => set({ temperature })}
         />
 
-        <div className="field">
-          <span className="field__label">
-            бюджет вывода <span className="field__value">{draft.maxTokens}</span>
-          </span>
-          <span className="field__hint">{budgetHint(catalog, draft.model)}</span>
-        </div>
+        <NumberField
+          label="бюджет вывода"
+          hint={budgetHint(catalog, draft.model)}
+          min={1}
+          max={ceilingOf(catalog, draft.model)}
+          value={draft.maxTokens}
+          onChange={(maxTokens) => set({ maxTokens })}
+        />
 
         <div className="settings__group">
           <span className="settings__group-title">стратегии контекста</span>
           <span className="field__hint">
-            Краткосрочная память: окно последних сообщений и пересказ того, что из него
-            выпало. Пересказ собирается всегда — терять окно молча было бы хуже, чем
-            заплатить за один служебный вызов. Рабочая память задачи и долговременный
-            справочник знаний живут отдельно и настроек не требуют. Ветки диалога —
-            кнопка «чекпоинт» в шапке чата.
+            Краткосрочная память: последние 20 сообщений уходят в модель как есть,
+            дальше окно закрывается и сворачивается в пересказ. Настройки здесь нет
+            намеренно — это предохранитель на случай, когда переписка по одной задаче
+            разрастается, а не ручка для кручения. Рабочая память задачи и долговременный
+            справочник знаний живут отдельно. Ветки диалога — кнопка «чекпоинт»
+            в шапке чата.
           </span>
         </div>
-
-        <NumberField
-          label="окно истории"
-          hint={
-            'сколько сообщений уходит в модель как есть. Когда окно заполняется, оно ' +
-            'закрывается — сворачивается в пересказ, — и отсчёт начинается заново. ' +
-            '0 — памяти нет вовсе, каждый запрос без контекста'
-          }
-          value={draft.historyDepth}
-          onChange={(historyDepth) => set({ historyDepth })}
-        />
 
         <NumberField
           label="лимит длины запроса"
@@ -134,25 +128,35 @@ function editable(draft) {
   return {
     model: draft.model,
     temperature: draft.temperature,
-    historyDepth: draft.historyDepth,
+    maxTokens: draft.maxTokens,
     maxInputChars: draft.maxInputChars,
   };
 }
 
-// бюджет вывода не редактируется: он выводится из модели и пересчитывается при
-// её смене. Одно значение на все модели и было причиной, по которой чат на
-// рассуждающей модели молчал -- весь бюджет уходил во внутреннее рассуждение
-function budgetOf(catalog, id) {
-  return catalog.models.find((item) => item.id === id)?.defaultMaxTokens ?? 0;
+function modelOf(catalog, id) {
+  return catalog.models.find((item) => item.id === id);
+}
+
+function ceilingOf(catalog, id) {
+  return modelOf(catalog, id)?.maxOutputTokens ?? 0;
+}
+
+// budgetAfterSwitch повторяет agent.MaxTokensAfterSwitch: одно значение на все модели
+// и было причиной, по которой чат на рассуждающей модели молчал -- весь бюджет уходил
+// во внутреннее рассуждение. Но и выбросить введённое человеком число нельзя
+function budgetAfterSwitch(catalog, from, to, current) {
+  const untouched = current === (modelOf(catalog, from)?.defaultMaxTokens ?? 0);
+  if (untouched) return modelOf(catalog, to)?.defaultMaxTokens ?? current;
+  return Math.min(current, ceilingOf(catalog, to) || current);
 }
 
 function budgetHint(catalog, id) {
-  const model = catalog.models.find((item) => item.id === id);
+  const model = modelOf(catalog, id);
   if (!model) return '';
   const tail = model.reasoning
-    ? 'сюда же входит внутреннее рассуждение, поэтому у рассуждающих моделей он щедрее'
+    ? 'у рассуждающих моделей сюда же входит внутреннее рассуждение, поэтому бюджет щедрее'
     : 'потолок длины ответа';
-  return `токенов, подставляется под модель (её потолок — ${model.maxOutputTokens}). ${tail}`;
+  return `токенов на ответ; потолок модели — ${model.maxOutputTokens}. ${tail}`;
 }
 
 function Slider({ label, hint, min, max, step, value, onChange }) {
@@ -174,14 +178,21 @@ function Slider({ label, hint, min, max, step, value, onChange }) {
   );
 }
 
-function NumberField({ label, hint, value, onChange }) {
+function NumberField({ label, hint, min, max, value, onChange }) {
+  // потолок держим сами: набрать число, на котором провайдер ответит отказом, нельзя.
+  // Нижнюю границу на каждом нажатии не зажимаем -- пока человек стирает поле, чтобы
+  // набрать новое число, подстановка минимума дралась бы с набором; её проверит сервер
+  const clamp = (next) => (max && next > max ? max : next);
+
   return (
     <label className="field">
       <span className="field__label">{label}</span>
       <input
         type="number"
+        min={min}
+        max={max}
         value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        onChange={(event) => onChange(clamp(Number(event.target.value)))}
       />
       <span className="field__hint">{hint}</span>
     </label>

@@ -76,7 +76,7 @@ func TestClearMessagesKeepsConfig(t *testing.T) {
 	s, _ := Open("")
 
 	cfg := agent.DefaultConfig("deepseek-flash")
-	cfg.HistoryDepth = 4
+	cfg.MaxInputChars = 1234
 	chat, _ := s.Create("чат", cfg)
 	if _, err := s.Append(chat.ID, Message{Role: "user", Kind: KindQuestion, Content: "вопрос"}); err != nil {
 		t.Fatalf("добавление: %v", err)
@@ -89,7 +89,7 @@ func TestClearMessagesKeepsConfig(t *testing.T) {
 	if len(cleared.Messages) != 0 {
 		t.Fatalf("история должна опустеть, получено %+v", cleared.Messages)
 	}
-	if cleared.Config.HistoryDepth != 4 {
+	if cleared.Config.MaxInputChars != 1234 {
 		t.Fatal("настройки должны сохраниться при очистке истории")
 	}
 }
@@ -565,5 +565,38 @@ func TestApplyConfigRejectsInvalid(t *testing.T) {
 	}
 	if chat.Config.Temperature == 9 {
 		t.Fatal("отклонённые настройки не должны присваиваться")
+	}
+}
+
+func TestApplyConfigKeepsHandPickedBudgetAcrossModelSwitch(t *testing.T) {
+	// бюджет теперь редактируемый, и молча выбрасывать введённое число нельзя:
+	// переключение модели -- не повод забыть, что человек выставил руками
+	chat := Chat{Config: agent.DefaultConfig("deepseek-flash")}
+	chat.Config.MaxTokens = 40_000
+
+	cfg := chat.Config
+	cfg.Model = "deepseek-v4-pro"
+	if err := chat.ApplyConfig(cfg); err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if chat.Config.MaxTokens != 40_000 {
+		t.Fatalf("введённое руками число должно пережить смену модели: %d", chat.Config.MaxTokens)
+	}
+}
+
+func TestApplyConfigClampsHandPickedBudgetToNewModelCeiling(t *testing.T) {
+	// а вот если оно в новую модель не влезает, выбор один: обрезать по её потолку,
+	// иначе настройки не прошли бы проверку и смена модели просто не состоялась бы
+	chat := Chat{Config: agent.DefaultConfig("deepseek-flash")}
+	chat.Config.MaxTokens = 200_000
+
+	cfg := chat.Config
+	cfg.Model = "liquid/lfm-2.5-2.6b:free"
+	if err := chat.ApplyConfig(cfg); err != nil {
+		t.Fatalf("смена модели не должна упираться в чужой бюджет: %v", err)
+	}
+	free, _ := agent.FindModel("liquid/lfm-2.5-2.6b:free")
+	if chat.Config.MaxTokens != free.MaxOutputTokens {
+		t.Fatalf("бюджет должен обрезаться по потолку новой модели: %d", chat.Config.MaxTokens)
 	}
 }

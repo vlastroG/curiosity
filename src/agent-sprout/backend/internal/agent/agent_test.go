@@ -212,8 +212,9 @@ func TestRunUnavailableModel(t *testing.T) {
 	// провайдер OpenRouter не передан вовсе
 	brain := New(fake, map[string]llm.Provider{llm.ProviderDeepSeek: llm.DeepSeek("test-key")})
 
-	cfg := testConfig()
-	cfg.Model = "liquid/lfm-2.5-2.6b:free"
+	// конфиг берём целиком от этой модели: с чужим бюджетом вывода запрос упёрся бы
+	// в окно контекста раньше, чем дошёл до провайдера
+	cfg := DefaultConfig("liquid/lfm-2.5-2.6b:free")
 
 	_, err := brain.Run(context.Background(), RunInput{Question: "вопрос", Config: cfg})
 

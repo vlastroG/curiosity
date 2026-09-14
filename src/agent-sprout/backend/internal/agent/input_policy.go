@@ -64,8 +64,8 @@ func checkInput(question string, cfg Config, window ContextState) (string, error
 			Stage: StageInput,
 			Reason: fmt.Sprintf(
 				"окно контекста заполнено: диалог занимает %d токенов плюс %d зарезервировано "+
-					"под ответ, а модель %s вмещает %d. Очистите историю, уменьшите max_tokens "+
-					"или глубину истории",
+					"под ответ, а модель %s вмещает %d. Очистите историю, уменьшите бюджет "+
+					"вывода или начните новый чат",
 				window.Carried, window.Reserve, window.Model, window.ModelLimit),
 		}
 	}

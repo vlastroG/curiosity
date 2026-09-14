@@ -33,9 +33,6 @@ export function StatsBar({ chat }) {
       <span className="stats__model">{config.model}</span>
       <span>t° {config.temperature}</span>
       <span>max_tokens {config.maxTokens}</span>
-      <span title="сколько сообщений уходит в модель как есть до закрытия окна">
-        окно {config.historyDepth}
-      </span>
 
       {totals ? (
         <>
