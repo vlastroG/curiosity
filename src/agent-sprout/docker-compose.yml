@@ -1,0 +1,16 @@
+services:
+  agent-sprout:
+    build: .
+    ports:
+      - "5173:8080"
+    env_file:
+      - ../../.env
+    environment:
+      # адрес приложения нужен OpenRouter для атрибуции запросов
+      APP_URL: http://localhost:5173
+    volumes:
+      # чаты и настройки переживают пересборку контейнера
+      - agent-sprout-data:/data
+
+volumes:
+  agent-sprout-data:
