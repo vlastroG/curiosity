@@ -33,7 +33,7 @@ type Verdict struct {
 func Guard(active *Task, solved []Task, knowledge []KnowledgeItem, claim Routing, newID func() string) Verdict {
 	verdict := Verdict{Decision: claim.Decision}
 
-	verdict.Knowledge = pickKnowledge(knowledge, claim.KnowledgeIDs, &verdict)
+	verdict.Knowledge = pickKnowledge(knowledge, attachedIDs(active), claim.KnowledgeIDs, &verdict)
 	verdict.RelatedTaskID = pickRelatedTask(solved, claim.RelatedTaskID, &verdict)
 
 	if active == nil || !active.Active() {
@@ -280,9 +280,24 @@ func normalizeChecklist(incoming []Requirement, verdict *Verdict) []Requirement 
 	return checklist
 }
 
-// pickKnowledge оставляет только те записи, которые действительно есть в справочнике.
-func pickKnowledge(knowledge []KnowledgeItem, ids []string, verdict *Verdict) []KnowledgeItem {
-	if len(ids) == 0 || len(knowledge) == 0 {
+// attachedIDs -- знания, уже прикреплённые к активной задаче.
+func attachedIDs(active *Task) []string {
+	if active == nil || !active.Active() {
+		return nil
+	}
+	return active.KnowledgeIDs
+}
+
+// pickKnowledge собирает знания, которые уедут в запрос: уже прикреплённые к задаче
+// плюс названные диспетчером на этом ходе. Оставляет только те, что действительно
+// есть в справочнике.
+//
+// Прикреплённые тянутся отдельно от заявки не для порядка: выбор знаний
+// переигрывается каждый ход, и стоило модели один раз не повторить id, как знание
+// молча исчезало из контекста посреди задачи. Раз уж оно однажды подошло виду работ,
+// держим его до закрытия задачи -- решать это заново на каждой реплике незачем.
+func pickKnowledge(knowledge []KnowledgeItem, attached, claimed []string, verdict *Verdict) []KnowledgeItem {
+	if len(knowledge) == 0 || (len(attached) == 0 && len(claimed) == 0) {
 		return nil
 	}
 
@@ -291,21 +306,32 @@ func pickKnowledge(knowledge []KnowledgeItem, ids []string, verdict *Verdict) []
 		byID[item.ID] = item
 	}
 
-	picked := make([]KnowledgeItem, 0, len(ids))
-	invented := 0
+	picked := make([]KnowledgeItem, 0, len(attached)+len(claimed))
 	seen := map[string]bool{}
 
-	for _, id := range ids {
+	take := func(id string) bool {
 		item, ok := byID[strings.TrimSpace(id)]
 		if !ok {
+			return false
+		}
+		if !seen[item.ID] {
+			seen[item.ID] = true
+			picked = append(picked, item)
+		}
+		return true
+	}
+
+	// прикреплённое молча пропускаем, если его больше нет: знание могли удалить
+	// из справочника посреди задачи, и диспетчер тут ни при чём
+	for _, id := range attached {
+		take(id)
+	}
+
+	invented := 0
+	for _, id := range claimed {
+		if !take(id) {
 			invented++
-			continue
 		}
-		if seen[item.ID] {
-			continue
-		}
-		seen[item.ID] = true
-		picked = append(picked, item)
 	}
 
 	if invented > 0 {

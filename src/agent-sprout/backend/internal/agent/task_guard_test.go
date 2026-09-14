@@ -411,3 +411,55 @@ func TestGuardKeepsPlaceholderAnswersWhileCollecting(t *testing.T) {
 		}
 	}
 }
+
+func TestGuardKeepsKnowledgeAttachedToTheTask(t *testing.T) {
+	// диспетчер выбирает знания заново на каждом ходе, и один пропуск не должен
+	// вымывать их из контекста посреди задачи
+	knowledge := []KnowledgeItem{{ID: "k1", Title: "Штукатурные работы", Text: "..."}}
+	task := &Task{
+		ID:           "t1",
+		Title:        "штукатурка стен",
+		Status:       TaskCollecting,
+		Requirements: checklist(5),
+		KnowledgeIDs: []string{"k1"},
+	}
+
+	verdict := Guard(task, nil, knowledge, Routing{
+		Decision:     DecisionCollect,
+		TaskTitle:    "штукатурка стен",
+		Requirements: task.Requirements,
+		// про знание диспетчер на этом ходе промолчал
+	}, fixedID())
+
+	if len(verdict.Knowledge) != 1 || verdict.Knowledge[0].ID != "k1" {
+		t.Fatalf("прикреплённое к задаче знание должно уехать в запрос: %+v", verdict.Knowledge)
+	}
+	if len(verdict.Overrides) != 0 {
+		t.Fatalf("это не понижение заявки, предупреждать не о чем: %v", verdict.Overrides)
+	}
+}
+
+func TestGuardForgetsKnowledgeDeletedFromTheReference(t *testing.T) {
+	// знание могли удалить из справочника посреди задачи. Диспетчер тут ни при чём,
+	// и жаловаться на «несуществующие знания» не за что
+	task := &Task{
+		ID:           "t1",
+		Title:        "штукатурка стен",
+		Status:       TaskCollecting,
+		Requirements: checklist(5),
+		KnowledgeIDs: []string{"k-удалённое"},
+	}
+
+	verdict := Guard(task, nil, []KnowledgeItem{{ID: "k1", Title: "другое"}}, Routing{
+		Decision:     DecisionCollect,
+		TaskTitle:    "штукатурка стен",
+		Requirements: task.Requirements,
+	}, fixedID())
+
+	if len(verdict.Knowledge) != 0 {
+		t.Fatalf("удалённое знание подставлять неоткуда: %+v", verdict.Knowledge)
+	}
+	if len(verdict.Overrides) != 0 {
+		t.Fatalf("удаление из справочника -- не вина диспетчера: %v", verdict.Overrides)
+	}
+}

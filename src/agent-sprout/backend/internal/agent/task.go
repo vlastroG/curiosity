@@ -133,7 +133,6 @@ type Routing struct {
 	Requirements  []Requirement `json:"requirements"`
 	Answers       []Answer      `json:"answers"`
 	KnowledgeIDs  []string      `json:"knowledgeIds"`
-	Reason        string        `json:"reason"`
 }
 
 // Границы чеклиста и опроса.
@@ -168,7 +167,7 @@ var routerSchema = &llm.Schema{
 		"additionalProperties": false,
 		"required": []string{
 			"decision", "taskTitle", "relatedTaskId",
-			"requirements", "answers", "knowledgeIds", "reason",
+			"requirements", "answers", "knowledgeIds",
 		},
 		"properties": map[string]any{
 			"decision": map[string]any{
@@ -198,7 +197,6 @@ var routerSchema = &llm.Schema{
 				"maxItems": maxRequirements,
 				"items":    map[string]any{"type": "string"},
 			},
-			"reason": map[string]any{"type": "string"},
 		},
 	},
 }
@@ -241,13 +239,16 @@ var routerSystem = fmt.Sprintf(
 		"если он не знает ответа — \"не знаю\".\n"+
 		"Новые пункты (не больше %d за ход) добавляй, только если всплыла новая сложность. "+
 		"Удалять пункты нельзя.\n\n"+
-		"Из списка знаний выбери номера тех, что относятся к этому виду работ.\n"+
+		"Из списка знаний выбери те, что относятся к этому виду работ, и верни их id "+
+		"слово в слово: это длинные строки вида 001487348eec4eeb, а не порядковые номера.\n"+
 		"Если тема совпадает с уже решённой задачей этого диалога, укажи её id.\n\n"+
 		"Ответ — ровно один json без текста до и после:\n"+
 		"{\"decision\":\"...\",\"taskTitle\":\"...\",\"relatedTaskId\":\"\","+
 		"\"requirements\":[{\"key\":\"...\",\"question\":\"...\"}],"+
 		"\"answers\":[{\"key\":\"...\",\"value\":\"...\"}],"+
-		"\"knowledgeIds\":[\"...\"],\"reason\":\"одна фраза\"}",
+		"\"knowledgeIds\":[\"...\"]}\n"+
+		"Пояснений к решению не пиши: их никто не читает, а на длинном пояснении "+
+		"ответ обрывается по бюджету и ход пропадает целиком.",
 	minRequirements, maxRequirements, maxNewPerTurn)
 
 // route -- служебный вызов, который разбирает сообщение пользователя.
