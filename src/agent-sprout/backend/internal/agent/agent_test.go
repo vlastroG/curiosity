@@ -127,14 +127,14 @@ func TestRunHappyPath(t *testing.T) {
 		t.Fatalf("ответ %q", out.Answer)
 	}
 	if out.Calls != 1 {
-		t.Fatalf("без судьи должен быть ровно один вызов, получено %d", out.Calls)
+		t.Fatalf("содержательный вызов на ходе один, получено %d", out.Calls)
 	}
 	// входная политика, машина состояний, сборка контекста, вызов, выходная политика
 	if len(out.Trace) != 5 {
 		t.Fatalf("ожидались пять шагов трейса, получено %d: %+v", len(out.Trace), out.Trace)
 	}
-	// 1000*0.014 + 2000*0.44 + 500*1.32 = 1554 за миллион токенов, время пиковое
-	if diff := out.Cost.USD - 0.001554; diff > 1e-9 || diff < -1e-9 {
+	// 1000*0.006 + 2000*0.3 + 500*1.2 = 1206 за миллион токенов, время пиковое
+	if diff := out.Cost.USD - 0.001206; diff > 1e-9 || diff < -1e-9 {
 		t.Fatalf("стоимость посчитана неверно: %v", out.Cost.USD)
 	}
 	if out.Cost.OffPeak {
@@ -207,65 +207,6 @@ func TestRunWithoutHistoryDepthSendsOnlyQuestion(t *testing.T) {
 	}
 }
 
-func TestRunWithJudgeAddsOneCall(t *testing.T) {
-	fake := &fakeLLM{responses: []llm.Response{
-		{Text: "четыре", FinishReason: "stop"},
-		{Text: `{"score": 5, "verdict": "точный ответ"}`, FinishReason: "stop"},
-	}}
-
-	cfg := testConfig()
-	cfg.JudgeEnabled = true
-
-	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
-		Question: "сколько будет два плюс два?",
-		Config:   cfg,
-	})
-	if err != nil {
-		t.Fatalf("неожиданная ошибка: %v", err)
-	}
-
-	answers := fake.answerCalls()
-	if len(answers) != 2 || out.Calls != 2 {
-		t.Fatalf("с судьёй должно быть два содержательных вызова, получено %d", len(answers))
-	}
-	if out.Judge == nil || out.Judge.Score != 5 {
-		t.Fatalf("вердикт судьи не разобрался: %+v", out.Judge)
-	}
-	if !answers[1].JSONObject {
-		t.Fatal("судья должен запрашивать json_object")
-	}
-	if answers[1].Temperature != 0 {
-		t.Fatalf("судья должен работать на нулевой температуре, получено %v", answers[1].Temperature)
-	}
-	if len(out.Trace) != 6 {
-		t.Fatalf("с судьёй в трейсе шесть шагов, получено %d", len(out.Trace))
-	}
-}
-
-func TestRunJudgeFailureKeepsAnswer(t *testing.T) {
-	fake := &fakeLLM{responses: []llm.Response{
-		{Text: "четыре", FinishReason: "stop"},
-		{Text: "оценка: отлично", FinishReason: "stop"}, // не json
-	}}
-
-	cfg := testConfig()
-	cfg.JudgeEnabled = true
-
-	out, err := newTestAgent(fake).Run(context.Background(), RunInput{Question: "вопрос", Config: cfg})
-	if err != nil {
-		t.Fatalf("сбой судьи не должен ронять ответ: %v", err)
-	}
-	if out.Answer != "четыре" {
-		t.Fatalf("ответ должен сохраниться, получено %q", out.Answer)
-	}
-	if out.Judge != nil {
-		t.Fatal("вердикта быть не должно")
-	}
-	if len(out.Warnings) == 0 {
-		t.Fatal("сбой судьи должен попасть в предупреждения")
-	}
-}
-
 func TestRunUnavailableModel(t *testing.T) {
 	fake := &fakeLLM{}
 	// провайдер OpenRouter не передан вовсе
@@ -282,26 +223,6 @@ func TestRunUnavailableModel(t *testing.T) {
 	}
 	if len(fake.calls) != 0 {
 		t.Fatal("недоступная модель не должна доходить до вызова")
-	}
-}
-
-func TestParseVerdictExtractsObjectFromNoise(t *testing.T) {
-	verdict, err := parseVerdict("Вот моя оценка:\n```json\n{\"score\": 4, \"verdict\": \"неплохо\"}\n```")
-	if err != nil {
-		t.Fatalf("объект должен вырезаться из обёртки: %v", err)
-	}
-	if verdict.Score != 4 || verdict.Verdict != "неплохо" {
-		t.Fatalf("вердикт разобран неверно: %+v", verdict)
-	}
-}
-
-func TestParseVerdictClampsScore(t *testing.T) {
-	verdict, err := parseVerdict(`{"score": 9, "verdict": "восторг"}`)
-	if err != nil {
-		t.Fatalf("неожиданная ошибка: %v", err)
-	}
-	if verdict.Score != 5 {
-		t.Fatalf("оценка должна прижиматься к пятёрке, получено %d", verdict.Score)
 	}
 }
 

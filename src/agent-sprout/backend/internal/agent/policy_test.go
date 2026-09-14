@@ -9,7 +9,7 @@ import (
 )
 
 func testConfig() Config {
-	cfg := DefaultConfig("deepseek-v4-flash")
+	cfg := DefaultConfig("deepseek-flash")
 	return cfg
 }
 
@@ -85,7 +85,7 @@ func TestCheckInputRejects(t *testing.T) {
 }
 
 func TestCheckOutputEmptyAnswerIsBlocked(t *testing.T) {
-	_, err := checkOutput("   ", llm.Response{FinishReason: "length"}, testConfig())
+	_, err := checkOutput("   ", llm.Response{FinishReason: "length"})
 
 	var policyErr *PolicyError
 	if !errors.As(err, &policyErr) {
@@ -100,28 +100,12 @@ func TestCheckOutputEmptyAnswerIsBlocked(t *testing.T) {
 	}
 }
 
-func TestCheckOutputInvalidJSONIsBlocked(t *testing.T) {
-	cfg := testConfig()
-	cfg.ResponseFormat = FormatJSON
-
-	if _, err := checkOutput("вот ваш ответ: {", llm.Response{FinishReason: "stop"}, cfg); err == nil {
-		t.Fatal("битый json должен блокироваться выходной политикой")
-	}
-
-	if _, err := checkOutput(`{"answer": 4}`, llm.Response{FinishReason: "stop"}, cfg); err != nil {
-		t.Fatalf("валидный json должен проходить, получено %v", err)
-	}
-}
-
-func TestCheckOutputWarnings(t *testing.T) {
-	cfg := testConfig()
-	cfg.MaxWords = 3
-
-	warnings, err := checkOutput("один два три четыре пять", llm.Response{FinishReason: "length"}, cfg)
+func TestCheckOutputWarnsAboutTruncation(t *testing.T) {
+	warnings, err := checkOutput("один два три четыре пять", llm.Response{FinishReason: "length"})
 	if err != nil {
-		t.Fatalf("мягкие нарушения не должны блокировать ответ: %v", err)
+		t.Fatalf("мягкое нарушение не должно блокировать ответ: %v", err)
 	}
-	if len(warnings) != 2 {
-		t.Fatalf("ожидались два предупреждения (обрезка и лимит слов), получено %v", warnings)
+	if len(warnings) != 1 {
+		t.Fatalf("ожидалось предупреждение об обрезке, получено %v", warnings)
 	}
 }

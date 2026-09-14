@@ -1,7 +1,11 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"agent-sprout/internal/agent"
 	"agent-sprout/internal/llm"
@@ -50,7 +54,15 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, runErr := d.Agent.Run(r.Context(), agent.RunInput{
+	// ход отвязан от живого клиента: context.WithoutCancel означает, что закрытая
+	// вкладка, потерянный wi-fi или нетерпеливый F5 больше не убивают уже оплаченную
+	// работу. Ход дописывается до конца и сохраняется -- пользователь увидит его,
+	// когда вернётся. Свой дедлайн при этом обязателен: без него отвалившийся
+	// клиент оставлял бы вызов висеть до таймаута провайдера
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), d.turnTimeout())
+	defer cancel()
+
+	out, runErr := d.Agent.Run(runCtx, agent.RunInput{
 		Question:    body.Content,
 		History:     window.Messages,
 		Summary:     window.Summary,
@@ -62,6 +74,7 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if runErr != nil {
+		runErr = explainDeadline(runCtx, runErr, d.turnTimeout())
 		status, code := classify(runErr)
 
 		// отказ политики и сбой провайдера остаются в ленте: пользователь должен видеть,
@@ -121,4 +134,28 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 	payload := d.chatPayload(chat)
 	payload["message"] = chat.Messages[len(chat.Messages)-1]
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// defaultTurnTimeout -- запас поверх таймаута одного вызова: ход рассуждающей модели
+// это диспетчер, ответ и пересказ задачи, то есть три вызова подряд.
+const defaultTurnTimeout = 8 * time.Minute
+
+func (d Deps) turnTimeout() time.Duration {
+	if d.TurnTimeout <= 0 {
+		return defaultTurnTimeout
+	}
+	return d.TurnTimeout
+}
+
+// explainDeadline заменяет "context deadline exceeded" на понятный текст.
+//
+// Голый context canceled в ленте не говорит ничего: непонятно, кто сдался и почему.
+// Раз уж ход больше не отменяется клиентом, единственная причина -- наш дедлайн,
+// и назвать его надо прямо.
+func explainDeadline(ctx context.Context, err error, limit time.Duration) error {
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("ход не уложился в %.0f секунд: модель думала слишком долго. "+
+		"Попробуйте ещё раз или выберите модель побыстрее", limit.Seconds())
 }

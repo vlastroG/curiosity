@@ -18,7 +18,7 @@ func TestSnapshotSurvivesRestart(t *testing.T) {
 		t.Fatalf("открытие пустого хранилища: %v", err)
 	}
 
-	cfg := agent.DefaultConfig("deepseek-v4-flash")
+	cfg := agent.DefaultConfig("deepseek-flash")
 	cfg.Temperature = 1.4
 
 	chat, err := first.Create("проверка", cfg)
@@ -53,7 +53,7 @@ func TestDeleteRemovesChat(t *testing.T) {
 		t.Fatalf("открытие: %v", err)
 	}
 
-	chat, err := s.Create("на удаление", agent.DefaultConfig("deepseek-v4-flash"))
+	chat, err := s.Create("на удаление", agent.DefaultConfig("deepseek-flash"))
 	if err != nil {
 		t.Fatalf("создание: %v", err)
 	}
@@ -75,8 +75,8 @@ func TestDeleteRemovesChat(t *testing.T) {
 func TestClearMessagesKeepsConfig(t *testing.T) {
 	s, _ := Open("")
 
-	cfg := agent.DefaultConfig("deepseek-v4-flash")
-	cfg.JudgeEnabled = true
+	cfg := agent.DefaultConfig("deepseek-flash")
+	cfg.HistoryDepth = 4
 	chat, _ := s.Create("чат", cfg)
 	if _, err := s.Append(chat.ID, Message{Role: "user", Kind: KindQuestion, Content: "вопрос"}); err != nil {
 		t.Fatalf("добавление: %v", err)
@@ -89,7 +89,7 @@ func TestClearMessagesKeepsConfig(t *testing.T) {
 	if len(cleared.Messages) != 0 {
 		t.Fatalf("история должна опустеть, получено %+v", cleared.Messages)
 	}
-	if !cleared.Config.JudgeEnabled {
+	if cleared.Config.HistoryDepth != 4 {
 		t.Fatal("настройки должны сохраниться при очистке истории")
 	}
 }
@@ -135,7 +135,7 @@ func TestWindowDropsQuestionThatOverflowedTheWindow(t *testing.T) {
 
 func TestSummaryCountsTotalCost(t *testing.T) {
 	s, _ := Open("")
-	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
 
 	if _, err := s.Append(chat.ID,
 		Message{Role: "assistant", Kind: KindAnswer, Meta: &Meta{TotalUSD: 0.001}},
@@ -155,7 +155,7 @@ func TestSummaryCountsTotalCost(t *testing.T) {
 
 func TestFinishTurnAttachesInputToTheQuestion(t *testing.T) {
 	s, _ := Open("")
-	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
 
 	if _, err := s.Append(chat.ID, Message{Role: "user", Kind: KindQuestion, Content: "вопрос"}); err != nil {
 		t.Fatalf("добавление вопроса: %v", err)
@@ -244,7 +244,7 @@ func TestLastTurnBlockedAnswerDoesNotCarryText(t *testing.T) {
 
 func TestSummaryCountsInputAndOutputSeparately(t *testing.T) {
 	s, _ := Open("")
-	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
 
 	if _, err := s.Append(chat.ID,
 		Message{Kind: KindQuestion, Input: &InputMeta{Tokens: 144}},
@@ -282,33 +282,9 @@ func TestWindowStartsAfterTheLastBoundary(t *testing.T) {
 	}
 }
 
-func TestWindowKeepsSummaryAcrossDroppedBoundary(t *testing.T) {
-	// сжатие выключили посреди чата: окно закрылось отбрасыванием, но память,
-	// накопленную раньше, это стирать не должно
-	chat := Chat{Messages: []Message{
-		{Role: "system", Kind: KindSummary, Content: "пересказ первого окна"},
-		{Role: "user", Kind: KindQuestion, Content: "вопрос второго окна"},
-		{Role: "assistant", Kind: KindAnswer, Content: "ответ второго окна"},
-		{Role: "system", Kind: KindDropped},
-		{Role: "user", Kind: KindQuestion, Content: "вопрос третьего окна"},
-		{Role: "assistant", Kind: KindAnswer, Content: "ответ третьего окна"},
-	}}
-
-	window := chat.Window()
-	if window.Summary != "пересказ первого окна" {
-		t.Fatalf("отбрасывание не должно стирать пересказ: %q", window.Summary)
-	}
-	if len(window.Messages) != 2 || window.Messages[0].Content != "вопрос третьего окна" {
-		t.Fatalf("окно должно начинаться после отбрасывания: %+v", window.Messages)
-	}
-	if window.Compactions != 2 {
-		t.Fatalf("границ было две, посчитано %d", window.Compactions)
-	}
-}
-
 func TestFinishTurnPutsBoundaryBeforeTheQuestion(t *testing.T) {
 	s, _ := Open("")
-	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
 
 	if _, err := s.Append(chat.ID,
 		Message{Role: "user", Kind: KindQuestion, Content: "старый вопрос"},
@@ -363,7 +339,7 @@ func TestLastTurnSkipsCompactionCalls(t *testing.T) {
 func TestCloneMakesAnIndependentBranch(t *testing.T) {
 	s, _ := Open("")
 
-	cfg := agent.DefaultConfig("deepseek-v4-flash")
+	cfg := agent.DefaultConfig("deepseek-flash")
 	source, _ := s.Create("исходный", cfg)
 
 	if _, err := s.Append(source.ID,
@@ -431,7 +407,7 @@ func TestCloneMakesAnIndependentBranch(t *testing.T) {
 
 func TestCloneRejectsDuplicateTag(t *testing.T) {
 	s, _ := Open("")
-	source, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+	source, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
 
 	if _, err := s.Clone(source.ID, "ветка"); err != nil {
 		t.Fatalf("первый чекпоинт: %v", err)
@@ -448,7 +424,7 @@ func TestCloneRejectsDuplicateTag(t *testing.T) {
 
 func TestCloneOfCloneKeepsLineage(t *testing.T) {
 	s, _ := Open("")
-	root, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+	root, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
 
 	first, _ := s.Clone(root.ID, "ветка-1")
 	second, err := s.Clone(first.ID, "ветка-1-1")
@@ -482,7 +458,7 @@ func TestActiveAndSolvedTasksAreSeparated(t *testing.T) {
 
 func TestCancelTaskFreesWorkingMemory(t *testing.T) {
 	s, _ := Open("")
-	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
 
 	if _, err := s.Append(chat.ID, Message{Role: "user", Kind: KindQuestion, Content: "вопрос"}); err != nil {
 		t.Fatalf("подготовка: %v", err)
@@ -516,7 +492,7 @@ func TestCancelTaskFreesWorkingMemory(t *testing.T) {
 func TestClearMessagesWipesMemory(t *testing.T) {
 	s, _ := Open("")
 
-	cfg := agent.DefaultConfig("deepseek-v4-flash")
+	cfg := agent.DefaultConfig("deepseek-flash")
 	chat, _ := s.Create("чат", cfg)
 
 	if _, err := s.Append(chat.ID,
@@ -546,5 +522,48 @@ func TestClearMessagesWipesMemory(t *testing.T) {
 	}
 	if cleared.Config.Model != cfg.Model {
 		t.Fatal("настройки при очистке сохраняются")
+	}
+}
+
+func TestApplyConfigRecomputesBudgetOnModelSwitch(t *testing.T) {
+	// ровно тот случай, ради которого правило живёт в ApplyConfig: пользователь
+	// переключает модель и больше ничего не трогает
+	chat := Chat{Config: agent.DefaultConfig("deepseek-flash")}
+
+	cfg := chat.Config
+	cfg.Model = "liquid/lfm-2.5-2.6b:free"
+	if err := chat.ApplyConfig(cfg); err != nil {
+		t.Fatalf("смена модели не должна упираться в проверку старого бюджета: %v", err)
+	}
+	if want := agent.MaxTokensFor("liquid/lfm-2.5-2.6b:free"); chat.Config.MaxTokens != want {
+		t.Fatalf("бюджет должен пересчитаться под новую модель: %d вместо %d",
+			chat.Config.MaxTokens, want)
+	}
+}
+
+func TestApplyConfigKeepsBudgetWhenModelStays(t *testing.T) {
+	chat := Chat{Config: agent.DefaultConfig("deepseek-flash")}
+	chat.Config.MaxTokens = 4096
+
+	cfg := chat.Config
+	cfg.Temperature = 0.2
+	if err := chat.ApplyConfig(cfg); err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if chat.Config.MaxTokens != 4096 {
+		t.Fatalf("правка соседней настройки не должна трогать бюджет: %d", chat.Config.MaxTokens)
+	}
+}
+
+func TestApplyConfigRejectsInvalid(t *testing.T) {
+	chat := Chat{Config: agent.DefaultConfig("deepseek-flash")}
+
+	cfg := chat.Config
+	cfg.Temperature = 9
+	if err := chat.ApplyConfig(cfg); err == nil {
+		t.Fatal("невалидные настройки не должны попадать в чат")
+	}
+	if chat.Config.Temperature == 9 {
+		t.Fatal("отклонённые настройки не должны присваиваться")
 	}
 }

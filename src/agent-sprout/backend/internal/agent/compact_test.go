@@ -22,10 +22,9 @@ func exchange(n int) []Message {
 	return window
 }
 
-func compactConfig(depth int, summarize bool) Config {
+func compactConfig(depth int) Config {
 	cfg := testConfig()
 	cfg.HistoryDepth = depth
-	cfg.SummarizeHistory = summarize
 	return cfg
 }
 
@@ -35,7 +34,7 @@ func TestCompactionDoesNotHappenBeforeWindowIsFull(t *testing.T) {
 	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
 		Question: "вопрос",
 		History:  exchange(3),
-		Config:   compactConfig(4, true),
+		Config:   compactConfig(4),
 	})
 	if err != nil {
 		t.Fatalf("неожиданная ошибка: %v", err)
@@ -62,7 +61,7 @@ func TestCompactionReplacesWindowWithSummary(t *testing.T) {
 	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
 		Question: "новый вопрос",
 		History:  exchange(4),
-		Config:   compactConfig(4, true),
+		Config:   compactConfig(4),
 	})
 	if err != nil {
 		t.Fatalf("неожиданная ошибка: %v", err)
@@ -108,7 +107,7 @@ func TestCompactionIsRecursiveOnSecondPass(t *testing.T) {
 		Question: "вопрос",
 		History:  exchange(4),
 		Summary:  "пересказ первого окна",
-		Config:   compactConfig(4, true),
+		Config:   compactConfig(4),
 	})
 	if err != nil {
 		t.Fatalf("неожиданная ошибка: %v", err)
@@ -129,43 +128,13 @@ func TestCompactionIsRecursiveOnSecondPass(t *testing.T) {
 	}
 }
 
-func TestCompactionDisabledDropsWindowButKeepsSummary(t *testing.T) {
-	fake := &fakeLLM{}
-
-	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
-		Question: "вопрос",
-		History:  exchange(4),
-		Summary:  "пересказ, накопленный раньше",
-		Config:   compactConfig(4, false),
-	})
-	if err != nil {
-		t.Fatalf("неожиданная ошибка: %v", err)
-	}
-
-	if calls := fake.answerCalls(); len(calls) != 1 {
-		t.Fatalf("без сжатия лишнего вызова быть не должно, получено %d", len(calls))
-	}
-	if out.Compaction == nil || !out.Compaction.Dropped || out.Compaction.Covered != 4 {
-		t.Fatalf("отметка об отбрасывании не заполнена: %+v", out.Compaction)
-	}
-	if out.HistoryMessages != 0 {
-		t.Fatalf("окно должно быть отброшено, отправлено %d", out.HistoryMessages)
-	}
-
-	// уже оплаченная память при этом остаётся: тумблер решает судьбу окна,
-	// а не судьбу накопленного пересказа
-	if sent := fake.answerCalls()[0].Messages; !containsContent(sent, "накопленный раньше") {
-		t.Fatalf("сохранённый пересказ должен уехать в запрос: %+v", sent)
-	}
-}
-
 func TestCompactionFailureCancelsTheTurn(t *testing.T) {
 	fake := &fakeLLM{err: &llm.APIError{Provider: "тест", Status: 500, Body: "упал"}}
 
 	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
 		Question: "вопрос",
 		History:  exchange(4),
-		Config:   compactConfig(4, true),
+		Config:   compactConfig(4),
 	})
 
 	if err == nil {
@@ -197,7 +166,7 @@ func TestCompactionRejectsEmptySummary(t *testing.T) {
 	_, err := newTestAgent(fake).Run(context.Background(), RunInput{
 		Question: "вопрос",
 		History:  exchange(4),
-		Config:   compactConfig(4, true),
+		Config:   compactConfig(4),
 	})
 
 	if err == nil {

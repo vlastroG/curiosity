@@ -89,15 +89,7 @@ function Presets({ presets, items, busy, onAdd }) {
           </span>
           <div className="knowledge__preset-list">
             {available.map((preset) => (
-              <button
-                key={preset.title}
-                className="btn btn--chip"
-                disabled={busy}
-                title={preset.text.slice(0, 200)}
-                onClick={() => onAdd({ title: preset.title, text: preset.text })}
-              >
-                + {preset.title}
-              </button>
+              <Preset key={preset.title} preset={preset} busy={busy} onAdd={onAdd} />
             ))}
           </div>
         </>
@@ -105,6 +97,74 @@ function Presets({ presets, items, busy, onAdd }) {
     </div>
   );
 }
+
+/**
+ * Одна заготовка: кнопка добавления и раскрывающийся текст.
+ *
+ * Читать его надо ДО добавления: заготовка ссылается на своды правил, и решить,
+ * подходит ли она объекту, по одному заголовку нельзя. Обрезанный тултип, который
+ * тут был раньше, ровно этого сделать и не давал.
+ */
+function Preset({ preset, busy, onAdd }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="preset">
+      <div className="preset__line">
+        <button
+          className="btn btn--chip"
+          disabled={busy}
+          onClick={() => onAdd({ title: preset.title, text: preset.text })}
+        >
+          + {preset.title}
+        </button>
+        <button className="trace__toggle" onClick={() => setOpen(!open)}>
+          {open ? '▾ скрыть' : '▸ посмотреть'}
+        </button>
+      </div>
+      {open && <div className="knowledge__item-text">{preset.text}</div>}
+    </div>
+  );
+}
+
+/**
+ * Сохранённое знание.
+ *
+ * Текст сворачивается: свод правил на полтора экрана распирал панель так, что
+ * до соседних знаний приходилось листать. Короткие знания сворачивать незачем --
+ * кнопка появляется только там, где есть что разворачивать.
+ */
+function SavedItem({ item, onEdit, onDelete }) {
+  const [open, setOpen] = useState(false);
+
+  const long = item.text.length > CLAMP_CHARS;
+  const clamped = long && !open;
+
+  return (
+    <div className="knowledge__item">
+      <div className="knowledge__item-head">
+        <span className="knowledge__item-title">{item.title}</span>
+        <button className="trace__toggle" onClick={onEdit}>
+          править
+        </button>
+        <button className="chat-row__delete" title="удалить знание" onClick={onDelete}>
+          ×
+        </button>
+      </div>
+      <div className={`knowledge__item-text${clamped ? ' knowledge__item-text--clamped' : ''}`}>
+        {item.text}
+      </div>
+      {long && (
+        <button className="trace__toggle" onClick={() => setOpen(!open)}>
+          {open ? '▾ свернуть' : '▸ показать целиком'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// длиннее этого знание сворачивается: примерно четыре строки панели
+const CLAMP_CHARS = 220;
 
 export function KnowledgePanel({
   items,
@@ -169,18 +229,12 @@ export function KnowledgePanel({
               onCancel={stop}
             />
           ) : (
-            <div key={item.id} className="knowledge__item">
-              <div className="knowledge__item-head">
-                <span className="knowledge__item-title">{item.title}</span>
-                <button className="trace__toggle" onClick={() => setEditing(item.id)}>
-                  править
-                </button>
-                <button className="chat-row__delete" title="удалить знание" onClick={() => onDelete(item.id)}>
-                  ×
-                </button>
-              </div>
-              <div className="knowledge__item-text">{item.text}</div>
-            </div>
+            <SavedItem
+              key={item.id}
+              item={item}
+              onEdit={() => setEditing(item.id)}
+              onDelete={() => onDelete(item.id)}
+            />
           )
         )}
       </div>

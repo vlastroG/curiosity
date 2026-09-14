@@ -19,7 +19,7 @@ type catalogModel struct {
 }
 
 // handleCatalog отдаёт справочник, по которому интерфейс строит панель настроек:
-// модели с ценами, пресеты system prompt и значения по умолчанию. Так константы
+// модели с ценами и потолками вывода плюс значения по умолчанию. Так константы
 // живут в одном месте -- на бэкенде.
 func (d Deps) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	models := make([]catalogModel, 0, len(agent.Models))
@@ -67,6 +67,9 @@ func (d Deps) handleCreateChat(w http.ResponseWriter, r *http.Request) {
 	cfg := agent.DefaultConfig(d.DefaultModel)
 	if body.Config != nil {
 		cfg = body.Config.apply(cfg)
+		// бюджет вывода всегда от модели, а не от модели по умолчанию: у бесплатной
+		// потолок в двадцать раз ниже, и чужое значение её не прошло бы
+		cfg.MaxTokens = agent.MaxTokensFor(cfg.Model)
 	}
 	if err := cfg.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, codeBadRequest, err.Error())
@@ -121,14 +124,13 @@ func (d Deps) handlePatchChat(w http.ResponseWriter, r *http.Request) {
 			chat.Title = title
 		}
 		if body.Config != nil {
-			updated := body.Config.apply(chat.Config)
-			if err := updated.Validate(); err != nil {
+			// не присваиваем напрямую: ApplyConfig достраивает выводимые настройки
+			// и проверяет результат -- иначе смена модели ломалась бы на проверке
+			// старого бюджета вывода
+			if err := chat.ApplyConfig(body.Config.apply(chat.Config)); err != nil {
 				invalid = err
 				return err
 			}
-			// не присваиваем напрямую: снятая галочка фактов должна стереть
-			// накопленную память, и это правило живёт в одном месте
-			chat.ApplyConfig(updated)
 		}
 		return nil
 	})
@@ -218,18 +220,12 @@ func writeStoreError(w http.ResponseWriter, err error) {
 // в интерфейсе, остальное берётся из текущей конфигурации чата. Указатели нужны,
 // чтобы отличить "поле не прислали" от "прислали ноль".
 type configPatch struct {
-	Model            *string  `json:"model"`
-	Temperature      *float64 `json:"temperature"`
-	MaxTokens        *int     `json:"maxTokens"`
-	TopP             *float64 `json:"topP"`
-	FrequencyPenalty *float64 `json:"frequencyPenalty"`
-	PresencePenalty  *float64 `json:"presencePenalty"`
-	ResponseFormat   *string  `json:"responseFormat"`
-	MaxWords         *int     `json:"maxWords"`
-	HistoryDepth     *int     `json:"historyDepth"`
-	SummarizeHistory *bool    `json:"summarizeHistory"`
-	JudgeEnabled     *bool    `json:"judgeEnabled"`
-	MaxInputChars    *int     `json:"maxInputChars"`
+	Model       *string  `json:"model"`
+	Temperature *float64 `json:"temperature"`
+	// maxTokens здесь нет намеренно: бюджет вывода выводится из модели,
+	// см. Chat.ApplyConfig
+	HistoryDepth  *int `json:"historyDepth"`
+	MaxInputChars *int `json:"maxInputChars"`
 }
 
 func (p configPatch) apply(cfg agent.Config) agent.Config {
@@ -239,32 +235,8 @@ func (p configPatch) apply(cfg agent.Config) agent.Config {
 	if p.Temperature != nil {
 		cfg.Temperature = *p.Temperature
 	}
-	if p.MaxTokens != nil {
-		cfg.MaxTokens = *p.MaxTokens
-	}
-	if p.TopP != nil {
-		cfg.TopP = *p.TopP
-	}
-	if p.FrequencyPenalty != nil {
-		cfg.FrequencyPenalty = *p.FrequencyPenalty
-	}
-	if p.PresencePenalty != nil {
-		cfg.PresencePenalty = *p.PresencePenalty
-	}
-	if p.ResponseFormat != nil {
-		cfg.ResponseFormat = *p.ResponseFormat
-	}
-	if p.MaxWords != nil {
-		cfg.MaxWords = *p.MaxWords
-	}
 	if p.HistoryDepth != nil {
 		cfg.HistoryDepth = *p.HistoryDepth
-	}
-	if p.SummarizeHistory != nil {
-		cfg.SummarizeHistory = *p.SummarizeHistory
-	}
-	if p.JudgeEnabled != nil {
-		cfg.JudgeEnabled = *p.JudgeEnabled
 	}
 	if p.MaxInputChars != nil {
 		cfg.MaxInputChars = *p.MaxInputChars

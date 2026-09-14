@@ -6,12 +6,13 @@
 // на выход ответ с метриками и трейсом. Поэтому агента можно вызвать из теста
 // с подставным LLM-клиентом, не поднимая сервер.
 //
-// Конвейер: входная политика -> сборка контекста -> вызов модели -> выходная политика
-// -> (необязательно) судья. Каждый этап пишет строку в трейс.
+// Конвейер: входная политика -> машина состояний -> сборка контекста -> вызов модели
+// -> выходная политика -> закрытие задачи. Каждый этап пишет строку в трейс.
 package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -69,17 +70,16 @@ type RunInput struct {
 // RunOutput -- результат прохода. Возвращается и при ошибке политики: трейс в этом
 // случае показывает, на каком этапе агент остановился.
 type RunOutput struct {
-	Answer       string        `json:"answer"`
-	Model        string        `json:"model"`
-	Usage        llm.Usage     `json:"usage"`
-	Cost         Cost          `json:"cost"`
-	TotalUSD     float64       `json:"totalUsd"`
-	LatencyMs    int           `json:"latencyMs"`
-	FinishReason string        `json:"finishReason"`
-	Calls        int           `json:"calls"`
-	Judge        *JudgeVerdict `json:"judge,omitempty"`
-	Warnings     []string      `json:"warnings,omitempty"`
-	Trace        []Step        `json:"trace"`
+	Answer       string    `json:"answer"`
+	Model        string    `json:"model"`
+	Usage        llm.Usage `json:"usage"`
+	Cost         Cost      `json:"cost"`
+	TotalUSD     float64   `json:"totalUsd"`
+	LatencyMs    int       `json:"latencyMs"`
+	FinishReason string    `json:"finishReason"`
+	Calls        int       `json:"calls"`
+	Warnings     []string  `json:"warnings,omitempty"`
+	Trace        []Step    `json:"trace"`
 	// Context -- состояние окна контекста перед этим запросом
 	Context ContextState `json:"context"`
 	// HistoryMessages -- сколько сообщений истории уехало в запрос вместе с вопросом
@@ -190,7 +190,7 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	out.Task = verdict.Task
 	out.Overrides = verdict.Overrides
 	out.Warnings = append(out.Warnings, verdict.Overrides...)
-	trace.record(StepRouting, stepStart, true, routingDetail(claim, verdict))
+	trace.record(StepRouting, stepStart, true, routingDetail(claim, verdict)+downgradeNote(routerResp.Downgraded))
 
 	// 3. Управление контекстом: если окно истории заполнилось, оно закрывается.
 	history, summary, err := a.manageContext(ctx, &out, trace, model, provider, in)
@@ -220,15 +220,13 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 
 	// 5. Вызов модели.
 	stepStart = time.Now()
+	// рассуждение здесь не ограничивается: детальный план работ -- ровно то место,
+	// где думать есть над чем
 	resp, err := a.llm.Chat(ctx, provider, llm.Request{
-		Model:            model.ID,
-		Messages:         messages,
-		Temperature:      in.Config.Temperature,
-		MaxTokens:        in.Config.MaxTokens,
-		TopP:             in.Config.TopP,
-		FrequencyPenalty: in.Config.FrequencyPenalty,
-		PresencePenalty:  in.Config.PresencePenalty,
-		JSONObject:       in.Config.ResponseFormat == FormatJSON,
+		Model:       model.ID,
+		Messages:    messages,
+		Temperature: in.Config.Temperature,
+		MaxTokens:   in.Config.MaxTokens,
 	})
 	if err != nil {
 		trace.record(StepLLM, stepStart, false, err.Error())
@@ -241,12 +239,13 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	out.Cost = model.Cost(resp.Usage, a.now())
 	out.TotalUSD += out.Cost.USD
 	trace.record(StepLLM, stepStart, true,
-		fmt.Sprintf("%d -> %d токенов, finish_reason=%s",
-			resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.FinishReason))
+		fmt.Sprintf("%d -> %d токенов, finish_reason=%s%s",
+			resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.FinishReason,
+			downgradeNote(resp.Downgraded)))
 
 	// 6. Выходная политика.
 	stepStart = time.Now()
-	warnings, err := checkOutput(resp.Text, resp, in.Config)
+	warnings, err := checkOutput(resp.Text, resp)
 	if err != nil {
 		trace.record(StepOutputPolicy, stepStart, false, err.Error())
 		out.LatencyMs = int(time.Since(startedAt).Milliseconds())
@@ -281,25 +280,27 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		}
 	}
 
-	// 8. Судья -- необязательный этап. Его сбой не должен стоить пользователю ответа,
-	// который уже получен и оплачен, поэтому ошибка уходит в трейс, а не наверх.
-	if in.Config.JudgeEnabled {
-		stepStart = time.Now()
-		verdict, judgeErr := a.judge(ctx, model, provider, question, resp.Text)
-		if judgeErr != nil {
-			trace.record(StepJudge, stepStart, false, judgeErr.Error())
-			out.Warnings = append(out.Warnings, "судья не смог оценить ответ: "+judgeErr.Error())
-		} else {
-			out.Judge = verdict
-			out.Calls++
-			out.TotalUSD += verdict.Cost.USD
-			trace.record(StepJudge, stepStart, true, fmt.Sprintf("оценка %d из 5", verdict.Score))
-		}
-	}
-
 	out.LatencyMs = int(time.Since(startedAt).Milliseconds())
 	out.Trace = trace.steps
 	return out, nil
+}
+
+// serviceTimeout -- потолок на один служебный вызов: диспетчер, сжатие, пересказ.
+//
+// Он короче общего дедлайна хода намеренно. Зависший диспетчер не должен съесть
+// весь бюджет и оставить пользователя без ответа: лучше честно сказать, что разбор
+// не сложился, чем молчать до последней секунды.
+const serviceTimeout = 4 * time.Minute
+
+// serviceDeadline отличает наш собственный дедлайн от чужого.
+//
+// Иначе в ленте оказывался таймаут хода целиком, хотя сдался служебный вызов
+// на своём, вчетверо меньшем сроке -- и цифра в сообщении не сходилась ни с чем.
+func serviceDeadline(parent context.Context, what string, err error) error {
+	if !errors.Is(err, context.DeadlineExceeded) || parent.Err() != nil {
+		return err
+	}
+	return fmt.Errorf("%s не уложился в %.0f секунд", what, serviceTimeout.Seconds())
 }
 
 // resolve находит модель в каталоге и провайдера с ключом.
@@ -325,8 +326,7 @@ func (a *Agent) Available(model Model) bool {
 // manageContext закрывает окно истории, если оно заполнилось.
 //
 // Возвращает то, что реально уедет в запрос: сообщения окна и пересказ. После
-// закрытия окна сообщений не остаётся -- их заменяет пересказ (или не заменяет
-// ничего, если сжатие выключено).
+// закрытия окна сообщений не остаётся -- их заменяет пересказ.
 func (a *Agent) manageContext(
 	ctx context.Context,
 	out *RunOutput,
@@ -347,16 +347,6 @@ func (a *Agent) manageContext(
 	}
 
 	stepStart := time.Now()
-
-	if !in.Config.SummarizeHistory {
-		// сжатие выключено: окно теряется. Пересказ, накопленный раньше, при этом
-		// остаётся -- выбрасывать уже оплаченную память было бы вредно
-		out.Compaction = &Compaction{Dropped: true, Covered: len(in.History)}
-		trace.record(StepCompact, stepStart, true, fmt.Sprintf(
-			"окно заполнено, %d %s отброшено без сжатия",
-			len(in.History), Plural(len(in.History), "сообщение", "сообщения", "сообщений")))
-		return nil, in.Summary, nil
-	}
 
 	compaction, err := a.compact(ctx, model, provider, in.Summary, in.History)
 	if err != nil {
@@ -387,27 +377,23 @@ func recursiveNote(recursive bool) string {
 	return ""
 }
 
+// downgradeNote -- отметка об откате ускоряющих параметров.
+//
+// В предупреждения она не идёт: для пользователя ничего не сломалось, ход прошёл
+// как надо. Но в трейсе это видно -- иначе молчаливая потеря ускорения выглядела бы
+// просто как «почему-то медленно».
+func downgradeNote(downgraded bool) string {
+	if !downgraded {
+		return ""
+	}
+	return " (провайдер не принимает часть ускоряющих параметров — запрос ушёл без них)"
+}
+
 func summaryNote(summary string) string {
 	if strings.TrimSpace(summary) != "" {
 		return ", плюс пересказ свёрнутой части"
 	}
 	return ""
-}
-
-// systemPrompt дополняет промпт чата требованиями, которые следуют из настроек.
-func systemPrompt(cfg Config) string {
-	// доменная роль скрыта и неизменяема: настройки могут добавить требования
-	// к оформлению ответа, но не отменить, кем агент является
-	prompt := DomainPrompt
-
-	if cfg.MaxWords > 0 {
-		prompt += fmt.Sprintf("\n\nУложись в %d слов.", cfg.MaxWords)
-	}
-	if cfg.ResponseFormat == FormatJSON {
-		prompt += "\n\n" + jsonInstruction
-	}
-
-	return prompt
 }
 
 func outputDetail(warnings []string) string {

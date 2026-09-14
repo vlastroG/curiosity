@@ -18,7 +18,8 @@ import (
 // что уже делал. Поэтому итог задачи сжимается в пересказ и переезжает
 // в краткосрочную память диалога.
 
-const taskSummaryMaxTokens = 1024
+// taskSummaryAnswerTokens -- 3-5 строк текста; запас на рассуждение добавит модель.
+const taskSummaryAnswerTokens = 1024
 
 const taskSummarySystem = "Ты сжимаешь только что решённую задачу в короткий пересказ " +
 	"для памяти диалога. Сохрани: какой вид работ, ключевые исходные данные " +
@@ -34,6 +35,11 @@ func (a *Agent) summarizeTask(
 	task Task,
 	plan string,
 ) (string, llm.Response, error) {
+	// свой дедлайн на служебный вызов, короче общего: см. serviceTimeout
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, serviceTimeout)
+	defer cancel()
+
 	var payload strings.Builder
 	fmt.Fprintf(&payload, "Вид работ: %s\n\nИсходные данные:\n", task.Title)
 	payload.WriteString(renderRequirements(task.Requirements, false))
@@ -47,11 +53,11 @@ func (a *Agent) summarizeTask(
 			{Role: llm.RoleUser, Content: payload.String()},
 		},
 		Temperature: 0,
-		MaxTokens:   taskSummaryMaxTokens,
-		TopP:        1,
+		MaxTokens:   model.ServiceTokens(taskSummaryAnswerTokens),
+		Thinking:    model.ServiceThinking(),
 	})
 	if err != nil {
-		return "", resp, err
+		return "", resp, serviceDeadline(parent, "пересказ задачи", err)
 	}
 
 	text := strings.TrimSpace(resp.Text)

@@ -101,14 +101,7 @@ export function ChatView({
           <MessageItem key={message.id} message={message} />
         ))}
 
-        {pending && (
-          <div className="bubble bubble--assistant">
-            <span className="muted">
-              агент работает
-              <span className="cursor" />
-            </span>
-          </div>
-        )}
+        {pending && <Working />}
 
         <div ref={bottomRef} />
       </div>
@@ -117,9 +110,7 @@ export function ChatView({
         <textarea
           rows={2}
           placeholder={
-            full
-              ? 'Окно контекста заполнено — очистите историю или уменьшите max_tokens'
-              : placeholder
+            full ? 'Окно контекста заполнено — очистите историю или начните новый чат' : placeholder
           }
           value={input}
           onChange={(event) => setInput(event.target.value)}
@@ -131,5 +122,38 @@ export function ChatView({
         </button>
       </footer>
     </main>
+  );
+}
+
+/**
+ * Пузырь ожидания со счётчиком секунд.
+ *
+ * На рассуждающей модели ход идёт десятками секунд: сначала думает диспетчер,
+ * потом модель над самим планом. Неподвижная надпись в этот момент неотличима
+ * от зависания, и человек жмёт перезагрузку ровно тогда, когда ждать оставалось
+ * немного. Бегущая цифра стоит одного интервала и снимает весь вопрос.
+ */
+function Working() {
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    const started = Date.now();
+    const timer = setInterval(() => setSeconds(Math.round((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="bubble bubble--assistant">
+      <span className="muted">
+        агент работает
+        <span className="cursor" />
+        {seconds >= 3 && <span className="working__clock">{seconds} с</span>}
+        {seconds >= 45 && (
+          <span className="working__note">
+            рассуждающая модель думает молча — ход не потеряется, даже если закрыть вкладку
+          </span>
+        )}
+      </span>
+    </div>
   );
 }

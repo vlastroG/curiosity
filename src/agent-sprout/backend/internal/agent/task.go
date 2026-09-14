@@ -149,9 +149,71 @@ const (
 	maxCollectTurns = 8
 )
 
-// routerMaxTokens -- бюджет диспетчера. Щедрый: рассуждающие модели тратят большую
-// часть на внутреннее рассуждение, а пустой ответ здесь отменяет весь ход.
-const routerMaxTokens = 4096
+// routerAnswerTokens -- сколько нужно самому json диспетчера. Щедро: чеклист
+// из двенадцати пунктов с вопросами по-русски -- это уже тысячи токенов, а обрыв
+// на середине даёт невалидный json и отменяет весь ход. Запас на рассуждение
+// добавит Model.ServiceTokens.
+const routerAnswerTokens = 4096
+
+// routerSchema -- строгая форма ответа диспетчера.
+//
+// Свободный json_object означал, что модель каждый раз заново придумывает форму:
+// слабая выдавала английские ключи и лишние поля, рассуждающая тратила на угадывание
+// формы то самое время, из-за которого ход не укладывался в таймаут. Провайдер,
+// не принявший схему, получит обычный json_object -- откат в llm.Client.
+var routerSchema = &llm.Schema{
+	Name: "routing",
+	Definition: map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required": []string{
+			"decision", "taskTitle", "relatedTaskId",
+			"requirements", "answers", "knowledgeIds", "reason",
+		},
+		"properties": map[string]any{
+			"decision": map[string]any{
+				"type": "string",
+				"enum": []string{
+					string(DecisionStart), string(DecisionCollect),
+					string(DecisionRefuseOffTopic), string(DecisionRefuseSecond),
+					string(DecisionAmbiguous),
+				},
+			},
+			"taskTitle":     map[string]any{"type": "string"},
+			"relatedTaskId": map[string]any{"type": "string"},
+			// maxItems обязателен: без верхней границы слабая модель уходит
+			// в бесконечный список и обрывается по бюджету на середине json
+			"requirements": map[string]any{
+				"type":     "array",
+				"maxItems": maxRequirements,
+				"items":    pairSchema("key", "question"),
+			},
+			"answers": map[string]any{
+				"type":     "array",
+				"maxItems": maxRequirements,
+				"items":    pairSchema("key", "value"),
+			},
+			"knowledgeIds": map[string]any{
+				"type":     "array",
+				"maxItems": maxRequirements,
+				"items":    map[string]any{"type": "string"},
+			},
+			"reason": map[string]any{"type": "string"},
+		},
+	},
+}
+
+func pairSchema(first, second string) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{first, second},
+		"properties": map[string]any{
+			first:  map[string]any{"type": "string"},
+			second: map[string]any{"type": "string"},
+		},
+	}
+}
 
 // routerSystem -- промпт маршрутизатора.
 var routerSystem = fmt.Sprintf(
@@ -199,6 +261,11 @@ func (a *Agent) route(
 	in RunInput,
 	question string,
 ) (Routing, llm.Response, error) {
+	// свой дедлайн на служебный вызов, короче общего: см. serviceTimeout
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, serviceTimeout)
+	defer cancel()
+
 	resp, err := a.llm.Chat(ctx, provider, llm.Request{
 		Model: model.ID,
 		Messages: []llm.Message{
@@ -207,17 +274,21 @@ func (a *Agent) route(
 		},
 		// нулевая температура: разбор состояния должен быть воспроизводимым
 		Temperature: 0,
-		MaxTokens:   routerMaxTokens,
-		TopP:        1,
-		JSONObject:  true,
+		MaxTokens:   model.ServiceTokens(routerAnswerTokens),
+		Schema:      routerSchema,
+		// диспетчер занят классификацией и извлечением, а не размышлением:
+		// полное рассуждение здесь только стоит денег и времени
+		Thinking: model.ServiceThinking(),
 	})
 	if err != nil {
-		return Routing{}, resp, err
+		return Routing{}, resp, serviceDeadline(parent, "диспетчер", err)
 	}
 
 	claim, err := parseRouting(resp.Text)
 	if err != nil {
-		return Routing{}, resp, err
+		// finish_reason отвечает на первый вопрос при разборе: модель сказала глупость
+		// или ей не хватило бюджета и ответ оборвался на середине
+		return Routing{}, resp, fmt.Errorf("%w (finish_reason=%s)", err, resp.FinishReason)
 	}
 	return claim, resp, nil
 }

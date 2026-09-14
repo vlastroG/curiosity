@@ -37,7 +37,10 @@ func run() error {
 	staticDir := env("STATIC_DIR", "./web")
 	dataFile := env("DATA_FILE", "./data/chats.json")
 	appURL := env("APP_URL", "http://localhost:5173")
-	timeout := durationEnv("LLM_TIMEOUT", 3*time.Minute)
+	// щедро: рассуждающая модель молчит десятки секунд до первого токена,
+	// а стриминга здесь нет -- ответ приходит целиком или не приходит вовсе
+	timeout := durationEnv("LLM_TIMEOUT", 5*time.Minute)
+	turnTimeout := durationEnv("TURN_TIMEOUT", 8*time.Minute)
 
 	providers := map[string]llm.Provider{
 		llm.ProviderDeepSeek:   llm.DeepSeek(os.Getenv("DEEPSEEK_API_KEY")),
@@ -63,6 +66,7 @@ func run() error {
 		Store:        chats,
 		DefaultModel: defaultModel,
 		StaticDir:    staticDir,
+		TurnTimeout:  turnTimeout,
 	})
 
 	server := &http.Server{

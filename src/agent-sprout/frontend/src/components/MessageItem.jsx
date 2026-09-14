@@ -84,24 +84,6 @@ function OutputMeta({ meta }) {
   );
 }
 
-/** Вердикт судьи: оценка и одно предложение по существу. */
-function Judge({ judge }) {
-  return (
-    <div className="judge">
-      <span className="judge__score" title={`оценка ${judge.score} из 5`}>
-        {'★'.repeat(judge.score)}
-        {'☆'.repeat(5 - judge.score)}
-      </span>
-      <span className="judge__verdict">{judge.verdict}</span>
-      {judge.cost?.usd > 0 && (
-        <span className="meta__cost" title="второй вызов модели тоже стоит денег">
-          судья {formatUSD(judge.cost.usd)}
-        </span>
-      )}
-    </div>
-  );
-}
-
 /**
  * Длинные вопросы сворачиваются.
  *
@@ -155,7 +137,7 @@ function Trace({ trace }) {
 
 export function MessageItem({ message }) {
   // граница окна истории -- не реплика, а служебная отметка во всю ширину ленты
-  if (message.kind === 'summary' || message.kind === 'dropped') {
+  if (message.kind === 'summary') {
     return <BoundaryMessage message={message} />;
   }
 
@@ -216,10 +198,8 @@ export function MessageItem({ message }) {
         </div>
       ))}
 
-      {meta?.judge && <Judge judge={meta.judge} />}
-
       {answered && (
-        <div className="turn-total" title="вход этого хода плюс выход, включая судью, если он включён">
+        <div className="turn-total" title="вход этого хода плюс выход, вместе со служебными вызовами">
           итого за ход {formatUSD(meta.totalUsd)}
         </div>
       )}

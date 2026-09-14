@@ -9,7 +9,7 @@ import (
 // Model -- запись каталога: что за модель, у какого провайдера и сколько стоит.
 //
 // Цены -- доллары за 1 млн токенов по пиковому тарифу, источник:
-// https://api-docs.deepseek.com/quick_start/pricing/ (снято 2026-09-07).
+// https://api-docs.deepseek.com/quick_start/pricing/ (снято 2026-09-14).
 // Вход тарифицируется по двум ставкам: попадание в кеш промпта дешевле промаха
 // в десятки раз, и провайдер присылает разбивку в usage.
 type Model struct {
@@ -22,6 +22,44 @@ type Model struct {
 	PriceOut        float64 `json:"priceOut"`
 	ContextTokens   int     `json:"contextTokens"`
 	MaxOutputTokens int     `json:"maxOutputTokens"`
+	// DefaultMaxTokens -- бюджет вывода для нового чата и для чата, в котором
+	// переключили модель. Один потолок на все модели не годится: у рассуждающей
+	// его съедает рассуждение, и до ответа дело не доходит
+	DefaultMaxTokens int `json:"defaultMaxTokens"`
+	// Reasoning -- модель думает перед ответом, причём по умолчанию и в полную силу.
+	// Отсюда два следствия: служебному вызову нужен запас токенов сверх самого
+	// ответа, и на служебном вызове рассуждение надо выключать
+	Reasoning bool `json:"reasoning"`
+	// ReasoningReserve -- запас токенов на рассуждение сверх длины ответа
+	ReasoningReserve int `json:"-"`
+}
+
+// ServiceTokens -- бюджет служебного вызова (диспетчер, сжатие, пересказ задачи).
+// answer -- сколько нужно самому ответу; остальное запас на рассуждение.
+//
+// max_tokens это потолок, а не счёт: за неизрасходованное не платят, а обрыв ответа
+// на середине стоит целого повторного вызова.
+func (m Model) ServiceTokens(answer int) int {
+	budget := answer + m.ReasoningReserve
+	if budget > m.MaxOutputTokens {
+		return m.MaxOutputTokens
+	}
+	return budget
+}
+
+// ServiceThinking -- режим рассуждения для служебного вызова.
+//
+// Диспетчер, сжатие и пересказ заняты классификацией и извлечением: размышлять там
+// не над чем, а ждём и платим мы именно за размышление. У DeepSeek рассуждение
+// включено по умолчанию с максимальным усилием -- то есть по умолчанию мы платим
+// за него всегда, даже когда просим модель разложить одну фразу по полям.
+// У ответа пользователю рассуждение остаётся полным: детальный план работ -- ровно
+// то место, где думать есть над чем.
+func (m Model) ServiceThinking() string {
+	if !m.Reasoning {
+		return ""
+	}
+	return llm.ThinkingOff
 }
 
 // Models -- весь набор моделей, доступных чату.
@@ -31,42 +69,63 @@ type Model struct {
 // Боевые ответы даёт DeepSeek.
 var Models = []Model{
 	{
-		ID:              "liquid/lfm-2.5-2.6b:free",
-		Title:           "LFM2.5-2.6B (free)",
-		Subtitle:        "бесплатная, для прогонов и отладки",
-		Provider:        llm.ProviderOpenRouter,
-		PriceCacheHit:   0,
-		PriceCacheMiss:  0,
-		PriceOut:        0,
-		ContextTokens:   65_000,
-		MaxOutputTokens: 4096,
+		ID:             "liquid/lfm-2.5-2.6b:free",
+		Title:          "LFM2.5-2.6B (free)",
+		Subtitle:       "бесплатная, для прогонов и отладки",
+		Provider:       llm.ProviderOpenRouter,
+		PriceCacheHit:  0,
+		PriceCacheMiss: 0,
+		PriceOut:       0,
+		ContextTokens:  65_000,
+		// потолок вывода взят из GET https://openrouter.ai/api/v1/models
+		MaxOutputTokens:  8192,
+		DefaultMaxTokens: 8192,
 	},
 	{
-		ID:              "deepseek-v4-flash",
-		Title:           "DeepSeek V4 Flash",
-		Subtitle:        "быстрая рассуждающая, рабочий вариант",
-		Provider:        llm.ProviderDeepSeek,
-		PriceCacheHit:   0.014,
-		PriceCacheMiss:  0.44,
-		PriceOut:        1.32,
-		ContextTokens:   1_000_000,
-		MaxOutputTokens: 384_000,
+		ID:               "deepseek-flash",
+		Title:            "DeepSeek Flash",
+		Subtitle:         "DeepSeek-V4.1-Flash, рассуждающая, рабочий вариант",
+		Provider:         llm.ProviderDeepSeek,
+		PriceCacheHit:    0.006,
+		PriceCacheMiss:   0.3,
+		PriceOut:         1.2,
+		ContextTokens:    1_000_000,
+		MaxOutputTokens:  384_000,
+		DefaultMaxTokens: 16_000,
+		Reasoning:        true,
+		ReasoningReserve: 8192,
 	},
 	{
-		ID:              "deepseek-v4-pro",
-		Title:           "DeepSeek V4 Pro",
-		Subtitle:        "флагманская рассуждающая, втрое дороже вывода",
-		Provider:        llm.ProviderDeepSeek,
-		PriceCacheHit:   0.044,
-		PriceCacheMiss:  1.32,
-		PriceOut:        3.96,
-		ContextTokens:   1_000_000,
-		MaxOutputTokens: 384_000,
+		ID:               "deepseek-v4-pro",
+		Title:            "DeepSeek V4 Pro",
+		Subtitle:         "DeepSeek-V4-Pro-0813, флагманская, дороже втрое",
+		Provider:         llm.ProviderDeepSeek,
+		PriceCacheHit:    0.044,
+		PriceCacheMiss:   1.32,
+		PriceOut:         3.96,
+		ContextTokens:    1_000_000,
+		MaxOutputTokens:  384_000,
+		DefaultMaxTokens: 16_000,
+		Reasoning:        true,
+		ReasoningReserve: 8192,
 	},
+}
+
+// modelAliases -- прежние id моделей.
+//
+// DeepSeek переименовал flash и оставил старое имя работающим: запросы обслуживает
+// новая модель. Держим ту же уступку у себя, чтобы чаты, заведённые до переименования,
+// не встречали пользователя словами «неизвестная модель».
+var modelAliases = map[string]string{
+	"deepseek-v4-flash": "deepseek-flash",
 }
 
 // FindModel ищет модель в каталоге по её id.
 func FindModel(id string) (Model, bool) {
+	if alias, ok := modelAliases[id]; ok {
+		id = alias
+	}
+
 	for _, model := range Models {
 		if model.ID == id {
 			return model, true
@@ -135,10 +194,3 @@ func IsOffPeak(at time.Time) bool {
 	}
 	return true
 }
-
-// jsonInstruction добавляется к system prompt при responseFormat=json_object.
-// Слово "json" в промпте -- требование провайдеров: без него запрос с
-// response_format=json_object отклоняется.
-const jsonInstruction = "Ответ верни одним валидным json-объектом. " +
-	"Никакого текста до или после объекта, никаких markdown-ограждений: " +
-	"весь ответ целиком должен разбираться как json."

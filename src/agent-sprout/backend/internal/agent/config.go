@@ -2,43 +2,30 @@ package agent
 
 import "fmt"
 
-// Форматы ответа, которые понимает конвейер.
-const (
-	FormatText = "text"
-	FormatJSON = "json_object"
-)
-
 // Config -- настройки одного чата. Ровно этот набор редактируется в интерфейсе
 // и целиком хранится вместе с чатом, так что у каждого чата свой характер.
+//
+// Набор намеренно короткий: в нём остались настройки, которые соответствуют нынешней
+// логике приложения. Формат ответа и лимит слов противоречили бы детальному плану
+// работ, штрафы и top_p на него не влияют, а сжатие истории теперь безусловное.
 type Config struct {
-	Model            string  `json:"model"`
-	Temperature      float64 `json:"temperature"`
-	MaxTokens        int     `json:"maxTokens"`
-	TopP             float64 `json:"topP"`
-	FrequencyPenalty float64 `json:"frequencyPenalty"`
-	PresencePenalty  float64 `json:"presencePenalty"`
-	ResponseFormat   string  `json:"responseFormat"`
-	// MaxWords -- мягкий лимит длины ответа: уходит в промпт и проверяется
-	// выходной политикой. 0 -- без лимита.
-	MaxWords int `json:"maxWords"`
+	Model       string  `json:"model"`
+	Temperature float64 `json:"temperature"`
+	// MaxTokens не редактируется руками: он выводится из модели и пересчитывается
+	// при её смене. Наружу отдаётся, чтобы интерфейс показывал бюджет вывода
+	MaxTokens int `json:"maxTokens"`
 	// HistoryDepth -- размер окна истории: сколько сообщений уезжает в модель как есть.
-	// Когда окно заполняется, оно закрывается -- сворачивается в саммари либо
-	// отбрасывается, -- и отсчёт начинается заново. 0 -- памяти нет вовсе,
-	// каждый запрос уходит без контекста.
+	// Когда окно заполняется, оно закрывается -- сворачивается в саммари, -- и отсчёт
+	// начинается заново. 0 -- памяти нет вовсе, каждый запрос уходит без контекста.
 	HistoryDepth int `json:"historyDepth"`
-	// SummarizeHistory -- сворачивать закрывшееся окно в саммари отдельным вызовом
-	// модели. Выключено -- окно на переходе просто теряется.
-	SummarizeHistory bool `json:"summarizeHistory"`
-	JudgeEnabled     bool `json:"judgeEnabled"`
 	// MaxInputChars -- потолок длины вопроса, проверяет входная политика.
 	MaxInputChars int `json:"maxInputChars"`
 }
 
-// Значения по умолчанию для нового чата.
+// Значения по умолчанию для нового чата. Бюджета вывода здесь нет: он приходит
+// из каталога моделей, см. DefaultConfig.
 const (
 	defaultTemperature   = 0.7
-	defaultMaxTokens     = 4096
-	defaultTopP          = 1.0
 	defaultHistoryDepth  = 10
 	defaultMaxInputChars = 4000
 )
@@ -49,25 +36,29 @@ const (
 	maxTemperature   = 2.0
 	maxHistoryDepth  = 100
 	maxInputCharsCap = 100_000
-	maxPenalty       = 2.0
 )
 
 // DefaultConfig -- настройки нового чата. Модель по умолчанию приходит из окружения
-// сервера, чтобы переключение "прогон на бесплатной ↔ работа на DeepSeek" не требовало
+// сервера, чтобы переключение "прогон на бесплатной <-> работа на DeepSeek" не требовало
 // правки кода.
 func DefaultConfig(defaultModel string) Config {
 	return Config{
-		Model:          defaultModel,
-		Temperature:    defaultTemperature,
-		MaxTokens:      defaultMaxTokens,
-		TopP:           defaultTopP,
-		ResponseFormat: FormatText,
-		HistoryDepth:   defaultHistoryDepth,
-		// сжатие включено: без него закрывшееся окно теряется целиком,
-		// а день 9 -- ровно про то, чтобы этого не происходило
-		SummarizeHistory: true,
-		MaxInputChars:    defaultMaxInputChars,
+		Model:         defaultModel,
+		Temperature:   defaultTemperature,
+		MaxTokens:     MaxTokensFor(defaultModel),
+		HistoryDepth:  defaultHistoryDepth,
+		MaxInputChars: defaultMaxInputChars,
 	}
+}
+
+// MaxTokensFor -- бюджет вывода для модели. Неизвестная модель не должна ронять
+// создание чата: Validate скажет о ней внятнее, чем паника на нулевом бюджете.
+func MaxTokensFor(modelID string) int {
+	model, ok := FindModel(modelID)
+	if !ok {
+		return 4096
+	}
+	return model.DefaultMaxTokens
 }
 
 // Validate проверяет настройки целиком. Вызывается при создании чата и при каждом
@@ -82,21 +73,6 @@ func (c Config) Validate() error {
 	}
 	if c.MaxTokens < 1 || c.MaxTokens > model.MaxOutputTokens {
 		return fmt.Errorf("max_tokens должен быть от 1 до %d для модели %s", model.MaxOutputTokens, model.ID)
-	}
-	if c.TopP <= 0 || c.TopP > 1 {
-		return fmt.Errorf("top_p должен быть больше 0 и не больше 1")
-	}
-	if c.FrequencyPenalty < -maxPenalty || c.FrequencyPenalty > maxPenalty {
-		return fmt.Errorf("frequency_penalty должен быть от -%g до %g", maxPenalty, maxPenalty)
-	}
-	if c.PresencePenalty < -maxPenalty || c.PresencePenalty > maxPenalty {
-		return fmt.Errorf("presence_penalty должен быть от -%g до %g", maxPenalty, maxPenalty)
-	}
-	if c.ResponseFormat != FormatText && c.ResponseFormat != FormatJSON {
-		return fmt.Errorf("response_format должен быть %q или %q", FormatText, FormatJSON)
-	}
-	if c.MaxWords < 0 {
-		return fmt.Errorf("max_words не может быть отрицательным")
 	}
 	if c.HistoryDepth < 0 || c.HistoryDepth > maxHistoryDepth {
 		return fmt.Errorf("окно истории должно быть от 0 до %d сообщений", maxHistoryDepth)

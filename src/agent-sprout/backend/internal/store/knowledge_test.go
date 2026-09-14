@@ -81,7 +81,7 @@ func TestKnowledgeIsNotClearedWithChatHistory(t *testing.T) {
 		t.Fatalf("добавление: %v", err)
 	}
 
-	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-v4-flash"))
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
 	if _, err := s.ClearMessages(chat.ID); err != nil {
 		t.Fatalf("очистка: %v", err)
 	}

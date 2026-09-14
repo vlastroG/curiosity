@@ -265,9 +265,6 @@ code,
 .stats__model {
   color: var(--accent-dim);
 }
-.stats__judge {
-  color: var(--accent);
-}
 .stats__sep {
   flex: 1;
 }
@@ -496,14 +493,6 @@ code,
   display: block;
   margin: 6px auto 0;
 }
-.boundary--dropped {
-  border-color: var(--warn);
-  color: var(--warn);
-}
-.boundary--dropped .boundary__label {
-  color: var(--warn);
-}
-
 /* ---------- окно контекста ---------- */
 
 .ctx {
@@ -557,24 +546,6 @@ code,
 .ctx--full .ctx__note,
 .ctx--full .ctx__label {
   color: var(--fail);
-}
-
-.judge {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  margin-top: 10px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  font-size: 12px;
-}
-.judge__score {
-  color: var(--accent);
-  letter-spacing: 1px;
-}
-.judge__verdict {
-  color: var(--text-muted);
 }
 
 .trace {
@@ -1163,8 +1134,31 @@ input[type='checkbox'] {
 }
 .knowledge__preset-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 6px;
+}
+.preset__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.preset__line .btn--chip {
+  flex: 1;
+  text-align: left;
+}
+.preset .knowledge__item-text {
+  margin: 4px 0 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--blueprint);
+}
+
+/* четыре строки -- достаточно, чтобы понять, о чём знание, и не отдать
+   ему всю панель */
+.knowledge__item-text--clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .task--confirming {
@@ -1172,4 +1166,17 @@ input[type='checkbox'] {
 }
 .task--confirming .task__label {
   color: var(--blueprint);
+}
+
+.working__clock {
+  margin-left: 0.6rem;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.working__note {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
 }

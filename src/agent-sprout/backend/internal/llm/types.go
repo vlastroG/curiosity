@@ -21,17 +21,31 @@ const (
 // Request -- параметры одного вызова модели. Поля повторяют тело OpenAI-совместимого
 // запроса, но собираются из настроек чата в internal/agent.
 type Request struct {
-	Model            string
-	Messages         []Message
-	Temperature      float64
-	MaxTokens        int
-	TopP             float64
-	FrequencyPenalty float64
-	PresencePenalty  float64
-	// JSONObject включает response_format={"type":"json_object"}. Провайдеры требуют,
-	// чтобы при этом в промпте встречалось слово "json" -- за это отвечает вызывающий.
-	JSONObject bool
+	Model       string
+	Messages    []Message
+	Temperature float64
+	MaxTokens   int
+	// Schema -- строгая схема ответа. Со схемой модель не тратит рассуждение
+	// на угадывание формы и не может вернуть лишних полей
+	Schema *Schema
+	// Thinking -- режим рассуждения рассуждающей модели. Пусто -- параметр
+	// не отправляется, и решает провайдер (у DeepSeek по умолчанию рассуждение
+	// включено с максимальным усилием)
+	Thinking string
 }
+
+// Schema -- json-схема ответа.
+type Schema struct {
+	Name       string
+	Definition map[string]any
+}
+
+// Значения Thinking. Совпадают с параметром thinking.type в API DeepSeek:
+// https://api-docs.deepseek.com/guides/thinking_mode (снято 2026-09-14).
+const (
+	ThinkingOn  = "enabled"
+	ThinkingOff = "disabled"
+)
 
 // Usage -- расход токенов, как его отдаёт провайдер.
 //
@@ -65,24 +79,37 @@ type Response struct {
 	FinishReason string
 	Usage        Usage
 	LatencyMs    int
+	// Downgraded -- провайдер не принял ускоряющие параметры, и запрос прошёл
+	// со второй попытки без них. Видно в трейсе
+	Downgraded bool
 }
 
 // wireRequest -- тело POST-запроса. Отдельный тип, потому что часть полей опускается,
 // когда значение не задано: лишний ключ в теле некоторые провайдеры считают ошибкой.
 type wireRequest struct {
-	Model            string       `json:"model"`
-	Messages         []Message    `json:"messages"`
-	Stream           bool         `json:"stream"`
-	Temperature      float64      `json:"temperature"`
-	MaxTokens        int          `json:"max_tokens,omitempty"`
-	TopP             float64      `json:"top_p,omitempty"`
-	FrequencyPenalty float64      `json:"frequency_penalty,omitempty"`
-	PresencePenalty  float64      `json:"presence_penalty,omitempty"`
-	ResponseFormat   *wireRespFmt `json:"response_format,omitempty"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Stream      bool      `json:"stream"`
+	Temperature float64   `json:"temperature"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	// thinking принимают не все провайдеры -- отсюда откат в client.go
+	Thinking       *wireThinking `json:"thinking,omitempty"`
+	ResponseFormat *wireRespFmt  `json:"response_format,omitempty"`
+}
+
+type wireThinking struct {
+	Type string `json:"type"`
 }
 
 type wireRespFmt struct {
-	Type string `json:"type"`
+	Type       string          `json:"type"`
+	JSONSchema *wireJSONSchema `json:"json_schema,omitempty"`
+}
+
+type wireJSONSchema struct {
+	Name   string         `json:"name"`
+	Strict bool           `json:"strict"`
+	Schema map[string]any `json:"schema"`
 }
 
 // wireResponse -- ответ провайдера. Поле error здесь не случайно: OpenRouter умеет

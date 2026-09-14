@@ -343,3 +343,71 @@ func TestGuardAllowsOffTopicDuringTask(t *testing.T) {
 		t.Fatalf("посторонний вопрос не должен тратить ход опроса: %+v", verdict.Task)
 	}
 }
+
+func TestGuardIgnoresPlaceholderAnswersOnStart(t *testing.T) {
+	// слабая модель на первом же ходе помечает весь чеклист как «не знаю»,
+	// хотя человека ещё ни о чём не спрашивали
+	claim := Routing{
+		Decision:  DecisionStart,
+		TaskTitle: "стяжка пола",
+		Requirements: []Requirement{
+			{Key: "основание", Question: "какое основание?"},
+			{Key: "площадь", Question: "сколько квадратов?"},
+			{Key: "толщина слоя", Question: "какая толщина?"},
+			{Key: "температура", Question: "какая температура?"},
+			{Key: "инструмент", Question: "чем работаете?"},
+		},
+		Answers: []Answer{
+			{Key: "площадь", Value: "24 квадрата"},
+			{Key: "основание", Value: "не знаю"},
+			{Key: "толщина слоя", Value: "не применимо"},
+		},
+	}
+
+	verdict := Guard(nil, nil, nil, claim, func() string { return "id" })
+
+	if verdict.Task == nil {
+		t.Fatal("задача должна завестись")
+	}
+	filled := map[string]string{}
+	for _, req := range verdict.Task.Requirements {
+		if req.Value != "" {
+			filled[req.Key] = req.Value
+		}
+	}
+	if len(filled) != 1 || filled["площадь"] != "24 квадрата" {
+		t.Fatalf("заполненным должно остаться только названное человеком: %+v", filled)
+	}
+	if len(verdict.Overrides) == 0 {
+		t.Fatal("понижение должно попасть в предупреждения -- недетерминированность видна")
+	}
+}
+
+func TestGuardKeepsPlaceholderAnswersWhileCollecting(t *testing.T) {
+	// а вот на опросе «не знаю» -- законный ответ: вопрос задан, ответа нет,
+	// и в план это уедет отдельным допущением
+	task := &Task{
+		ID:     "t1",
+		Title:  "стяжка пола",
+		Status: TaskCollecting,
+		Requirements: []Requirement{
+			{Key: "основание", Question: "какое основание?"},
+			{Key: "площадь", Question: "сколько квадратов?", Value: "24 квадрата"},
+		},
+	}
+
+	claim := Routing{
+		Decision:     DecisionCollect,
+		TaskTitle:    "стяжка пола",
+		Requirements: task.Requirements,
+		Answers:      []Answer{{Key: "основание", Value: "не знаю"}},
+	}
+
+	verdict := Guard(task, nil, nil, claim, func() string { return "id" })
+
+	for _, req := range verdict.Task.Requirements {
+		if req.Key == "основание" && req.Value != "не знаю" {
+			t.Fatalf("на опросе «не знаю» -- заполненный пункт, получено %q", req.Value)
+		}
+	}
+}

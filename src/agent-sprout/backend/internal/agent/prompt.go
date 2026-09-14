@@ -44,7 +44,9 @@ type contextParts struct {
 // инструкция хода — она должна стоять ближе всего к вопросу, чтобы не потеряться
 // за простынёй контекста.
 func buildMessages(question string, parts contextParts, cfg Config) []llm.Message {
-	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemPrompt(cfg)}}
+	// доменная роль скрыта и неизменяема: редактора system prompt в настройках нет,
+	// иначе и машина состояний, и слои памяти обесценились бы одной репликой
+	messages := []llm.Message{{Role: llm.RoleSystem, Content: DomainPrompt}}
 
 	system := func(content string) {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: content})

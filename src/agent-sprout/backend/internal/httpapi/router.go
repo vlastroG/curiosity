@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"agent-sprout/internal/agent"
 	"agent-sprout/internal/store"
@@ -17,6 +18,9 @@ type Deps struct {
 	Store        *store.Store
 	DefaultModel string
 	StaticDir    string
+	// TurnTimeout -- сколько ход может идти целиком. Отсчитывается от начала хода,
+	// а не от вызова модели: ход состоит из нескольких вызовов
+	TurnTimeout time.Duration
 }
 
 // New собирает маршрутизатор.

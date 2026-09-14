@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
-	"fmt"
 	"strings"
 
 	"agent-sprout/internal/llm"
@@ -13,7 +11,7 @@ import (
 // Различает два вида нарушений. Мягкие возвращаются предупреждениями: ответ всё равно
 // показывается, но рядом написано, чем он плох. Жёсткие -- это PolicyError: показывать
 // нечего, и вместо пустого пузыря пользователь видит объяснение.
-func checkOutput(text string, resp llm.Response, cfg Config) ([]string, error) {
+func checkOutput(text string, resp llm.Response) ([]string, error) {
 	trimmed := strings.TrimSpace(text)
 
 	if trimmed == "" {
@@ -26,24 +24,20 @@ func checkOutput(text string, resp llm.Response, cfg Config) ([]string, error) {
 		return nil, &PolicyError{Stage: StageOutput, Reason: reason}
 	}
 
-	if cfg.ResponseFormat == FormatJSON && !json.Valid([]byte(trimmed)) {
-		return nil, &PolicyError{
-			Stage:  StageOutput,
-			Reason: "чат настроен на json, но ответ не разбирается как валидный json",
-		}
-	}
-
 	var warnings []string
 
 	if resp.FinishReason == "length" {
 		warnings = append(warnings, "ответ обрезан по лимиту max_tokens")
 	}
 
-	if cfg.MaxWords > 0 {
-		if words := len(strings.Fields(trimmed)); words > cfg.MaxWords {
-			warnings = append(warnings, fmt.Sprintf("в ответе %d слов при лимите %d", words, cfg.MaxWords))
-		}
-	}
-
 	return warnings, nil
+}
+
+// trimForError укорачивает чужой текст в сообщении об ошибке: целиком он ломает
+// вёрстку, а для понимания причины хватает начала.
+func trimForError(s string) string {
+	if len(s) > 200 {
+		return s[:200] + "…"
+	}
+	return s
 }

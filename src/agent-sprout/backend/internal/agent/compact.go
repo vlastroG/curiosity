@@ -20,14 +20,10 @@ import (
 
 // Compaction -- что случилось с окном на переходе.
 //
-// Один тип на оба режима тумблера: отметка в ленте нужна и когда история сжата,
-// и когда потеряна, -- иначе пользователь не понимает, почему агент вдруг забыл
-// начало разговора.
+// Отметка в ленте обязательна: без неё пользователь не понимает, почему агент
+// вдруг стал говорить о начале разговора общими словами.
 type Compaction struct {
-	// Dropped -- сжатие выключено, окно просто выброшено. Тогда Text пуст,
-	// а вызова модели не было
-	Dropped bool   `json:"dropped"`
-	Text    string `json:"text,omitempty"`
+	Text string `json:"text,omitempty"`
 	// Covered -- сколько сообщений окна перестали уезжать в модель
 	Covered int `json:"covered"`
 	// Recursive -- в сжатие вошёл предыдущий пересказ
@@ -52,10 +48,9 @@ const compactSystem = "Ты сжимаешь историю диалога, чт
 	"Не добавляй вступлений вроде «вот пересказ» и не комментируй свою работу: " +
 	"верни только сам пересказ."
 
-// compactMaxTokens -- потолок на пересказ. Он должен быть заметно меньше окна,
-// иначе сжатие теряет смысл, но у рассуждающих моделей часть бюджета уходит
-// во внутреннее рассуждение, поэтому впритык ставить нельзя.
-const compactMaxTokens = 2048
+// compactAnswerTokens -- потолок на сам пересказ. Он должен быть заметно меньше окна,
+// иначе сжатие теряет смысл; запас на рассуждение добавит Model.ServiceTokens.
+const compactAnswerTokens = 2048
 
 // summaryPreamble -- под каким видом пересказ уезжает в запрос.
 const summaryPreamble = "Краткое содержание предыдущей части этого диалога. " +
@@ -74,6 +69,11 @@ func (a *Agent) compact(
 ) (*Compaction, error) {
 	recursive := strings.TrimSpace(summary) != ""
 
+	// свой дедлайн на служебный вызов, короче общего: см. serviceTimeout
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, serviceTimeout)
+	defer cancel()
+
 	resp, err := a.llm.Chat(ctx, provider, llm.Request{
 		Model: model.ID,
 		Messages: []llm.Message{
@@ -82,11 +82,12 @@ func (a *Agent) compact(
 		},
 		// нулевая температура: пересказ должен быть точным, а не разнообразным
 		Temperature: 0,
-		MaxTokens:   compactMaxTokens,
-		TopP:        1,
+		MaxTokens:   model.ServiceTokens(compactAnswerTokens),
+		// пересказ -- это извлечение фактов, размышлять тут не над чем
+		Thinking: model.ServiceThinking(),
 	})
 	if err != nil {
-		return nil, err
+		return nil, serviceDeadline(parent, "сжатие", err)
 	}
 
 	text := strings.TrimSpace(resp.Text)

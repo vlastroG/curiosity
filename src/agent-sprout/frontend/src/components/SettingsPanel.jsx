@@ -61,70 +61,21 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
           onChange={(temperature) => set({ temperature })}
         />
 
-        <Slider
-          label="top_p"
-          hint="доля вероятностной массы, из которой выбираются токены"
-          min={0.05}
-          max={1}
-          step={0.05}
-          value={draft.topP}
-          onChange={(topP) => set({ topP })}
-        />
-
-        <Slider
-          label="frequency_penalty"
-          hint="штраф за повторы одних и тех же слов"
-          min={-2}
-          max={2}
-          step={0.1}
-          value={draft.frequencyPenalty}
-          onChange={(frequencyPenalty) => set({ frequencyPenalty })}
-        />
-
-        <Slider
-          label="presence_penalty"
-          hint="штраф за возврат к уже затронутым темам"
-          min={-2}
-          max={2}
-          step={0.1}
-          value={draft.presencePenalty}
-          onChange={(presencePenalty) => set({ presencePenalty })}
-        />
-
-        <NumberField
-          label="max_tokens"
-          hint="потолок длины ответа; у рассуждающих моделей сюда же входит внутреннее рассуждение"
-          value={draft.maxTokens}
-          onChange={(maxTokens) => set({ maxTokens })}
-        />
-
-        <label className="field">
-          <span className="field__label">формат ответа</span>
-          <select
-            value={draft.responseFormat}
-            onChange={(event) => set({ responseFormat: event.target.value })}
-          >
-            <option value="text">обычный текст</option>
-            <option value="json_object">json-объект</option>
-          </select>
-          <span className="field__hint">
-            в режиме json выходная политика проверяет, что ответ действительно разбирается
+        <div className="field">
+          <span className="field__label">
+            бюджет вывода <span className="field__value">{draft.maxTokens}</span>
           </span>
-        </label>
-
-        <NumberField
-          label="лимит слов"
-          hint="0 — без лимита; попадает в промпт и проверяется выходной политикой"
-          value={draft.maxWords}
-          onChange={(maxWords) => set({ maxWords })}
-        />
+          <span className="field__hint">{budgetHint(catalog, draft.model)}</span>
+        </div>
 
         <div className="settings__group">
           <span className="settings__group-title">стратегии контекста</span>
           <span className="field__hint">
             Краткосрочная память: окно последних сообщений и пересказ того, что из него
-            выпало. Рабочая память задачи и долговременный справочник знаний живут
-            отдельно и настроек не требуют. Ветки диалога — кнопка «чекпоинт» в шапке чата.
+            выпало. Пересказ собирается всегда — терять окно молча было бы хуже, чем
+            заплатить за один служебный вызов. Рабочая память задачи и долговременный
+            справочник знаний живут отдельно и настроек не требуют. Ветки диалога —
+            кнопка «чекпоинт» в шапке чата.
           </span>
         </div>
 
@@ -132,31 +83,12 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
           label="окно истории"
           hint={
             'сколько сообщений уходит в модель как есть. Когда окно заполняется, оно ' +
-            'закрывается — сворачивается в пересказ или отбрасывается, — и отсчёт ' +
-            'начинается заново. 0 — памяти нет вовсе, каждый запрос без контекста'
+            'закрывается — сворачивается в пересказ, — и отсчёт начинается заново. ' +
+            '0 — памяти нет вовсе, каждый запрос без контекста'
           }
           value={draft.historyDepth}
           onChange={(historyDepth) => set({ historyDepth })}
         />
-
-        <label className="field field--check">
-          <input
-            type="checkbox"
-            checked={draft.summarizeHistory}
-            onChange={(event) => set({ summarizeHistory: event.target.checked })}
-          />
-          <span>
-            <span className="field__label">сжимать историю</span>
-            <span className="field__hint">
-              на закрытии окна агент отдельным вызовом модели сворачивает его в короткий
-              пересказ и дальше подставляет пересказ вместо самих сообщений. Каждое
-              следующее сжатие складывает прошлый пересказ с новым окном, так что память
-              копится, а запрос не растёт. Выключено — окно на переходе просто теряется.
-              Стоит одного дополнительного вызова модели на каждые {draft.historyDepth}{' '}
-              сообщений
-            </span>
-          </span>
-        </label>
 
         <NumberField
           label="лимит длины запроса"
@@ -164,20 +96,6 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
           value={draft.maxInputChars}
           onChange={(maxInputChars) => set({ maxInputChars })}
         />
-
-        <label className="field field--check">
-          <input
-            type="checkbox"
-            checked={draft.judgeEnabled}
-            onChange={(event) => set({ judgeEnabled: event.target.checked })}
-          />
-          <span>
-            <span className="field__label">судья</span>
-            <span className="field__hint">
-              второй вызов модели оценивает ответ по шкале 1–5. Удваивает расход токенов
-            </span>
-          </span>
-        </label>
       </div>
 
       <div className="settings__foot">
@@ -199,6 +117,18 @@ function modelHint(catalog, id) {
   if (!model) return '';
   if (model.priceOut === 0) return `${model.subtitle} · бесплатно`;
   return `${model.subtitle} · $${model.priceCacheMiss} / $${model.priceOut} за 1M (peak)`;
+}
+
+// бюджет вывода не редактируется: он выводится из модели и пересчитывается при
+// её смене. Одно значение на все модели и было причиной, по которой чат на
+// рассуждающей модели молчал -- весь бюджет уходил во внутреннее рассуждение
+function budgetHint(catalog, id) {
+  const model = catalog.models.find((item) => item.id === id);
+  if (!model) return '';
+  const tail = model.reasoning
+    ? 'сюда же входит внутреннее рассуждение, поэтому у рассуждающих моделей он щедрее'
+    : 'потолок длины ответа';
+  return `токенов, подставляется под модель (её потолок — ${model.maxOutputTokens}). ${tail}`;
 }
 
 function Slider({ label, hint, min, max, step, value, onChange }) {

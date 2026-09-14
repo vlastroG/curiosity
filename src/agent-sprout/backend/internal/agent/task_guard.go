@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -75,7 +76,11 @@ func guardWithoutTask(claim Routing, verdict Verdict, newID func() string) Verdi
 		Requirements: requirements,
 		CollectTurns: 1,
 	}
-	applyAnswers(task, claim.Answers, &verdict)
+	// на инициализации в чеклист уезжает только то, что человек действительно назвал
+	// в первом сообщении. Отговорки «не знаю» и «не применимо» на этом ходе взяться
+	// неоткуда: вопросов ему ещё не задавали. Слабая модель заполняет ими весь чеклист
+	// разом, и без этой отсечки задача уходила бы в план, не спросив ни о чём
+	applyAnswers(task, withoutPlaceholders(claim.Answers, &verdict), &verdict)
 	task.KnowledgeIDs = refIDs(verdict.Knowledge)
 	verdict.Task = task
 
@@ -161,6 +166,28 @@ func guardWithTask(active Task, claim Routing, verdict Verdict) Verdict {
 //
 // Ключи, которых в чеклисте нет, дописываются в конец уже заполненными: терять
 // добровольно отданные данные нельзя, даже если диспетчер не спрашивал о них.
+// placeholderAnswers -- значения, которыми диспетчер помечает пункт закрытым,
+// не получив ответа. На ходе инициализации они означают выдумку.
+var placeholderAnswers = []string{"не знаю", "не применимо"}
+
+func withoutPlaceholders(answers []Answer, verdict *Verdict) []Answer {
+	kept := make([]Answer, 0, len(answers))
+	dropped := 0
+	for _, answer := range answers {
+		value := strings.ToLower(strings.TrimSpace(answer.Value))
+		if slices.Contains(placeholderAnswers, value) {
+			dropped++
+			continue
+		}
+		kept = append(kept, answer)
+	}
+	if dropped > 0 {
+		verdict.note("на инициализации отброшено %d %s вида «не знаю»: пользователя ещё ни о чём не спрашивали",
+			dropped, Plural(dropped, "значение", "значения", "значений"))
+	}
+	return kept
+}
+
 func applyAnswers(task *Task, answers []Answer, verdict *Verdict) {
 	for _, answer := range answers {
 		key := strings.TrimSpace(answer.Key)

@@ -26,15 +26,12 @@ const (
 	// KindSummary -- саммари свёрнутой части диалога. Не реплика собеседника,
 	// а служебная отметка: с этого места история заменена коротким пересказом
 	KindSummary = "summary"
-	// KindDropped -- история отброшена без сжатия, потому что тумблер выключен.
-	// Тоже граница окна, но памяти после неё не остаётся
-	KindDropped = "dropped"
 )
 
 // IsBoundary -- закрывает ли сообщение окно истории. Всё, что до границы,
 // в модель больше не уезжает.
 func IsBoundary(kind string) bool {
-	return kind == KindSummary || kind == KindDropped
+	return kind == KindSummary
 }
 
 // Message -- одно сообщение ленты.
@@ -119,17 +116,10 @@ func CompactionMessage(c *agent.Compaction, model string) *Message {
 
 	message := &Message{
 		Role:       llm.RoleSystem,
-		Kind:       KindDropped,
+		Kind:       KindSummary,
+		Content:    c.Text,
 		Compaction: &Compaction{Covered: c.Covered, Recursive: c.Recursive},
 	}
-
-	// отбрасывание не стоит ни одного вызова: отмечать нечего, кроме самого факта
-	if c.Dropped {
-		return message
-	}
-
-	message.Kind = KindSummary
-	message.Content = c.Text
 	message.Input = &InputMeta{
 		Model:     model,
 		Tokens:    c.Usage.PromptTokens,
@@ -152,15 +142,14 @@ func CompactionMessage(c *agent.Compaction, model string) *Message {
 
 // Meta -- метрики одного прохода агента, которые показываются под ответом.
 type Meta struct {
-	Model        string              `json:"model"`
-	Usage        llm.Usage           `json:"usage"`
-	Reasoning    int                 `json:"reasoningTokens"`
-	Cost         agent.Cost          `json:"cost"`
-	TotalUSD     float64             `json:"totalUsd"`
-	LatencyMs    int                 `json:"latencyMs"`
-	FinishReason string              `json:"finishReason"`
-	Calls        int                 `json:"calls"`
-	Judge        *agent.JudgeVerdict `json:"judge,omitempty"`
+	Model        string     `json:"model"`
+	Usage        llm.Usage  `json:"usage"`
+	Reasoning    int        `json:"reasoningTokens"`
+	Cost         agent.Cost `json:"cost"`
+	TotalUSD     float64    `json:"totalUsd"`
+	LatencyMs    int        `json:"latencyMs"`
+	FinishReason string     `json:"finishReason"`
+	Calls        int        `json:"calls"`
 	// Memory -- снимок трёх слоёв памяти, ушедших в этот запрос
 	Memory agent.MemorySnapshot `json:"memory"`
 	// Decision -- что агент сделал на этом ходе
@@ -182,7 +171,6 @@ func MetaFrom(out agent.RunOutput) *Meta {
 		LatencyMs:    out.LatencyMs,
 		FinishReason: out.FinishReason,
 		Calls:        out.Calls,
-		Judge:        out.Judge,
 		Memory:       out.Memory,
 		Decision:     out.Decision,
 		Overrides:    out.Overrides,
@@ -212,14 +200,22 @@ type Chat struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// ApplyConfig меняет настройки чата, обнуляя память там, где она перестала быть
-// осмысленной.
+// ApplyConfig меняет настройки чата: сперва достраивает то, что выводится
+// из других настроек, затем проверяет целое и только потом присваивает.
 //
-// Снятая галочка фактов стирает накопленное: пользователь именно так их и сбрасывает,
-// а держать невидимую память, которая никуда не уезжает, но ждёт своего часа, --
-// верный способ однажды удивиться.
-func (c *Chat) ApplyConfig(cfg agent.Config) {
+// Бюджет вывода пользователь не задаёт -- он выводится из модели и пересчитывается
+// при её смене. Правило живёт здесь, а не в HTTP-слое, чтобы его нельзя было обойти
+// и чтобы проверка видела уже пересчитанное значение: у бесплатной модели потолок
+// вывода в двадцать раз ниже, чем у DeepSeek, и старый бюджет её не прошёл бы.
+func (c *Chat) ApplyConfig(cfg agent.Config) error {
+	if cfg.Model != c.Config.Model {
+		cfg.MaxTokens = agent.MaxTokensFor(cfg.Model)
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
 	c.Config = cfg
+	return nil
 }
 
 // ActiveTask -- задача, которая сейчас в работе, либо nil.
