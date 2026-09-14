@@ -23,6 +23,11 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
 
   const set = (patch) => setDraft((prev) => ({ ...prev, ...patch }));
 
+  // бюджет вывода выводится из модели, и пересчитывает его сервер. Но показать
+  // новое число надо сразу при выборе модели, а не после «применить»: рядом написано
+  // «подставляется под модель», и неподвижная цифра выглядит как обман
+  const chooseModel = (model) => set({ model, maxTokens: budgetOf(catalog, model) });
+
   return (
     <aside className="settings">
       <div className="settings__head">
@@ -40,7 +45,7 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
 
         <label className="field">
           <span className="field__label">модель</span>
-          <select value={draft.model} onChange={(event) => set({ model: event.target.value })}>
+          <select value={draft.model} onChange={(event) => chooseModel(event.target.value)}>
             {catalog.models.map((model) => (
               <option key={model.id} value={model.id} disabled={!model.available}>
                 {model.title}
@@ -103,7 +108,7 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
         <button
           className="btn"
           disabled={!dirty || saving}
-          onClick={() => onSave({ title, config: draft })}
+          onClick={() => onSave({ title, config: editable(draft) })}
         >
           {saving ? 'сохраняю…' : dirty ? 'применить' : 'сохранено'}
         </button>
@@ -119,9 +124,28 @@ function modelHint(catalog, id) {
   return `${model.subtitle} · $${model.priceCacheMiss} / $${model.priceOut} за 1M (peak)`;
 }
 
+// editable -- что панель имеет право отправить.
+//
+// Черновик держит настройки чата целиком, включая выводимые: бюджет вывода лежит
+// в нём, чтобы его показать. Но сервер принимает только редактируемые поля и на
+// лишнее отвечает отказом -- пусть список того, что уходит на сервер, будет виден
+// глазами, а не складывался сам собой из того, что оказалось в черновике.
+function editable(draft) {
+  return {
+    model: draft.model,
+    temperature: draft.temperature,
+    historyDepth: draft.historyDepth,
+    maxInputChars: draft.maxInputChars,
+  };
+}
+
 // бюджет вывода не редактируется: он выводится из модели и пересчитывается при
 // её смене. Одно значение на все модели и было причиной, по которой чат на
 // рассуждающей модели молчал -- весь бюджет уходил во внутреннее рассуждение
+function budgetOf(catalog, id) {
+  return catalog.models.find((item) => item.id === id)?.defaultMaxTokens ?? 0;
+}
+
 function budgetHint(catalog, id) {
   const model = catalog.models.find((item) => item.id === id);
   if (!model) return '';
