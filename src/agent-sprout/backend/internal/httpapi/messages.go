@@ -69,6 +69,7 @@ func (d Deps) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		Task:        chat.ActiveTask(),
 		SolvedTasks: chat.SolvedTasks(),
 		Knowledge:   d.Store.KnowledgeItems(),
+		Profile:     d.Store.Profile().Agent(),
 		Config:      chat.Config,
 		Last:        last,
 	})

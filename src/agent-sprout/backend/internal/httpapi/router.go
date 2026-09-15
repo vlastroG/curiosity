@@ -46,6 +46,10 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("DELETE /api/chats/{id}/messages", deps.handleClearMessages)
 	mux.HandleFunc("POST /api/chats/{id}/task/cancel", deps.handleCancelTask)
 
+	// профиль один на всё приложение -- отсюда маршруты без идентификатора
+	mux.HandleFunc("GET /api/profile", deps.handleGetProfile)
+	mux.HandleFunc("PUT /api/profile", deps.handleSaveProfile)
+
 	// долговременная память общая для всех чатов, поэтому и маршруты у неё свои
 	mux.HandleFunc("GET /api/knowledge", deps.handleListKnowledge)
 	mux.HandleFunc("POST /api/knowledge", deps.handleCreateKnowledge)

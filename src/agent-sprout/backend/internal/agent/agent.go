@@ -61,7 +61,10 @@ type RunInput struct {
 	SolvedTasks []Task
 	// Knowledge -- справочник долговременной памяти целиком; диспетчер отбирает нужное
 	Knowledge []KnowledgeItem
-	Config    Config
+	// Profile -- персонализация: кто пользователь и как с ним разговаривать.
+	// Один на все чаты, уезжает в каждый запрос
+	Profile Profile
+	Config  Config
 	// Last -- числа последнего состоявшегося вызова в этом чате. Нужны, чтобы
 	// посчитать заполненность окна контекста по факту, а не по оценке
 	Last LastTurn
@@ -118,6 +121,8 @@ type MemorySnapshot struct {
 	TaskTitle    string        `json:"taskTitle,omitempty"`
 	TaskStatus   TaskStatus    `json:"taskStatus,omitempty"`
 	Requirements []Requirement `json:"requirements,omitempty"`
+	// персонализация: какие секции профиля уехали в запрос
+	Profile []string `json:"profile,omitempty"`
 	// краткосрочная: память диалога
 	SolvedTasks     []SolvedRef `json:"solvedTasks,omitempty"`
 	WindowSummary   bool        `json:"windowSummary"`
@@ -202,6 +207,7 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	// 4. Сборка контекста: три слоя памяти плюс инструкция под решение стража.
 	stepStart = time.Now()
 	parts := contextParts{
+		Profile:       in.Profile,
 		Summary:       summary,
 		Knowledge:     verdict.Knowledge,
 		Task:          verdict.Task,
@@ -214,9 +220,10 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	out.HistoryMessages = len(history)
 	out.Memory = snapshotMemory(parts, summary, len(history))
 	trace.record(StepBuildContext, stepStart, true, fmt.Sprintf(
-		"%d %s в запросе: знаний %d, истории %d, решённых задач %d%s",
+		"%d %s в запросе: знаний %d, истории %d, решённых задач %d%s%s",
 		len(messages), Plural(len(messages), "сообщение", "сообщения", "сообщений"),
-		len(verdict.Knowledge), out.HistoryMessages, len(in.SolvedTasks), summaryNote(summary)))
+		len(verdict.Knowledge), out.HistoryMessages, len(in.SolvedTasks),
+		summaryNote(summary), profileNote(in.Profile)))
 
 	// 5. Вызов модели.
 	stepStart = time.Now()
@@ -387,6 +394,15 @@ func downgradeNote(downgraded bool) string {
 		return ""
 	}
 	return " (провайдер не принимает часть ускоряющих параметров — запрос ушёл без них)"
+}
+
+// profileNote -- отметка о персонализации в трейсе.
+func profileNote(profile Profile) string {
+	filled := profile.Filled()
+	if len(filled) == 0 {
+		return ""
+	}
+	return ", профиль (" + strings.Join(filled, ", ") + ")"
 }
 
 func summaryNote(summary string) string {

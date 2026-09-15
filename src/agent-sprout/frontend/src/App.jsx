@@ -3,6 +3,7 @@ import { api, ApiError } from './api.js';
 import { ChatList } from './components/ChatList.jsx';
 import { ChatView } from './components/ChatView.jsx';
 import { KnowledgePanel } from './components/KnowledgePanel.jsx';
+import { ProfilePanel } from './components/ProfilePanel.jsx';
 import { SettingsPanel } from './components/SettingsPanel.jsx';
 
 /**
@@ -33,6 +34,12 @@ export default function App() {
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [knowledgeBusy, setKnowledgeBusy] = useState(false);
   const [knowledgeError, setKnowledgeError] = useState(null);
+  // профиль тоже общий для всех чатов и живёт на уровне приложения
+  const [profile, setProfile] = useState(null);
+  const [profilePresets, setProfilePresets] = useState([]);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState(null);
   const [taskBusy, setTaskBusy] = useState(false);
   const [error, setError] = useState(null);
   const [settingsError, setSettingsError] = useState(null);
@@ -45,15 +52,18 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [loadedCatalog, list, memory] = await Promise.all([
+        const [loadedCatalog, list, memory, person] = await Promise.all([
           api.catalog(),
           api.listChats(),
           api.knowledge(),
+          api.profile(),
         ]);
         setCatalog(loadedCatalog);
         setChats(list.chats);
         setKnowledge(memory.knowledge ?? []);
         setKnowledgePresets(memory.presets ?? []);
+        setProfile(person.profile ?? null);
+        setProfilePresets(person.presets ?? []);
         if (list.chats.length > 0) setActiveId(list.chats[0].id);
       } catch (caught) {
         fail(caught);
@@ -208,6 +218,19 @@ export default function App() {
     withKnowledge(() => api.updateKnowledge(id, body), done);
   const handleDeleteKnowledge = (id) => withKnowledge(() => api.deleteKnowledge(id));
 
+  async function handleSaveProfile(draft) {
+    setProfileError(null);
+    setProfileBusy(true);
+    try {
+      const saved = await api.saveProfile(draft);
+      setProfile(saved.profile ?? null);
+    } catch (caught) {
+      setProfileError(caught.message);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
   async function handleClear() {
     setError(null);
     try {
@@ -260,7 +283,20 @@ export default function App() {
         {error && <span className="app__error">{error}</span>}
         <button
           className="btn btn--ghost app__knowledge"
-          onClick={() => setKnowledgeOpen((open) => !open)}
+          onClick={() => {
+            setProfileOpen((open) => !open);
+            setKnowledgeOpen(false);
+          }}
+          title="персонализация: как агент разговаривает именно с вами, во всех чатах"
+        >
+          профиль {profileFilled(profile) ? '✓' : ''}
+        </button>
+        <button
+          className="btn btn--ghost"
+          onClick={() => {
+            setKnowledgeOpen((open) => !open);
+            setProfileOpen(false);
+          }}
           title="долговременная память: знания, общие для всех чатов"
         >
           знания {knowledge.length > 0 ? `(${knowledge.length})` : ''}
@@ -319,6 +355,16 @@ export default function App() {
             <p className="muted">Выберите чат слева или создайте новый.</p>
           </main>
         )}
+        {profileOpen && (
+          <ProfilePanel
+            profile={profile}
+            presets={profilePresets}
+            busy={profileBusy}
+            error={profileError}
+            onSave={handleSaveProfile}
+            onClose={() => setProfileOpen(false)}
+          />
+        )}
         {knowledgeOpen && (
           <KnowledgePanel
             items={knowledge}
@@ -334,6 +380,13 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+// profileFilled -- заполнен ли профиль хоть чем-то. Отметка на кнопке отвечает
+// на вопрос «действует он сейчас или нет» без открывания панели
+function profileFilled(profile) {
+  if (!profile) return false;
+  return ['about', 'style', 'format', 'limits'].some((key) => profile[key]?.trim());
 }
 
 /**

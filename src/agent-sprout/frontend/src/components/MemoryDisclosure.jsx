@@ -1,14 +1,18 @@
 import { useState } from 'react';
 
 /**
- * Снимок памяти хода — что именно уехало в запрос из каждого слоя.
+ * Снимок памяти хода — что именно уехало в запрос.
  *
- * Ради этого блока задание дня 11 и существует: без него «модель памяти» остаётся
- * словами в README. Три секции помечены цветом слоя, и цвет здесь не украшение —
- * он отвечает на вопрос «что где лежит» раньше, чем человек прочтёт подписи.
+ * Без него «модель памяти» остаётся словами в README. Три слоя памяти помечены
+ * цветом, и цвет здесь не украшение — он отвечает на вопрос «что где лежит» раньше,
+ * чем человек прочтёт подписи. Профиль стоит первым и отдельно: он не слой памяти,
+ * а персонализация, и живёт не по правилам памяти, а до неё.
  */
 
 const HINTS = {
+  profile:
+    'Персонализация: секции профиля пользователя, которые уехали в этот запрос. ' +
+    'Профиль один на все чаты, задаётся кнопкой «профиль» в шапке и подставляется всегда.',
   long:
     'Долговременная память: знания из общего справочника, которые агент отобрал ' +
     'под этот вид работ. Живут вне чатов и не стираются ни очисткой истории, ни закрытием задачи.',
@@ -25,6 +29,7 @@ export function MemoryDisclosure({ memory, decision }) {
 
   if (!memory) return null;
 
+  const profile = memory.profile ?? [];
   const knowledge = memory.knowledge ?? [];
   const requirements = memory.requirements ?? [];
   const solved = memory.solvedTasks ?? [];
@@ -36,14 +41,29 @@ export function MemoryDisclosure({ memory, decision }) {
         {open ? '▾' : '▸'} память хода
         <span className="memory__counts">
           {' '}
-          знаний {knowledge.length} · исходных данных {filled}/{requirements.length} · история{' '}
-          {memory.historyMessages}
+          {profile.length > 0 ? 'профиль · ' : ''}знаний {knowledge.length} · исходных данных{' '}
+          {filled}/{requirements.length} · история {memory.historyMessages}
           {memory.windowSummary ? ' + пересказ' : ''}
         </span>
       </button>
 
       {open && (
         <div className="memory__body">
+          <section className="memory__layer memory__layer--profile" title={HINTS.profile}>
+            <span className="memory__label">персонализация — профиль</span>
+            {profile.length === 0 ? (
+              <span className="muted">профиль не заполнен</span>
+            ) : (
+              <div className="memory__chips">
+                {profile.map((section) => (
+                  <span key={section} className="chip chip--profile">
+                    {section}
+                  </span>
+                ))}
+              </div>
+            )}
+          </section>
+
           <section className="memory__layer memory__layer--long" title={HINTS.long}>
             <span className="memory__label">долговременная — знания</span>
             {knowledge.length === 0 ? (

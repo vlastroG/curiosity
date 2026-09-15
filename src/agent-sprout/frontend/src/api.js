@@ -68,6 +68,9 @@ export const api = {
   checkpoint: (id, tag) => request(`/chats/${id}/checkpoint`, { method: 'POST', body: { tag } }),
   cancelTask: (id) => request(`/chats/${id}/task/cancel`, { method: 'POST', body: {} }),
 
+  profile: () => request('/profile'),
+  saveProfile: (body) => request('/profile', { method: 'PUT', body }),
+
   knowledge: () => request('/knowledge'),
   addKnowledge: (body) => request('/knowledge', { method: 'POST', body }),
   updateKnowledge: (id, body) => request(`/knowledge/${id}`, { method: 'PATCH', body }),

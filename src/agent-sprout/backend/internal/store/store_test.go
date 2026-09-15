@@ -600,3 +600,69 @@ func TestApplyConfigClampsHandPickedBudgetToNewModelCeiling(t *testing.T) {
 		t.Fatalf("бюджет должен обрезаться по потолку новой модели: %d", chat.Config.MaxTokens)
 	}
 }
+
+func TestProfileSurvivesReload(t *testing.T) {
+	// профиль живёт вне чатов и должен переживать перезапуск так же, как знания
+	path := filepath.Join(t.TempDir(), "chats.json")
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("открытие: %v", err)
+	}
+	if _, err := s.SetProfile(Profile{About: "делаю сам", Limits: "нет болгарки"}); err != nil {
+		t.Fatalf("сохранение профиля: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("повторное открытие: %v", err)
+	}
+	got := reopened.Profile()
+	if got.About != "делаю сам" || got.Limits != "нет болгарки" {
+		t.Fatalf("профиль не пережил перезагрузку: %+v", got)
+	}
+	if got.UpdatedAt == nil {
+		t.Fatal("время правки должно проставляться при сохранении")
+	}
+}
+
+func TestProfileIsNotTouchedByChats(t *testing.T) {
+	// чаты приходят и уходят, профиль остаётся: он про пользователя, а не про разговор
+	s, _ := Open("")
+	if _, err := s.SetProfile(Profile{Style: "коротко"}); err != nil {
+		t.Fatalf("сохранение профиля: %v", err)
+	}
+
+	chat, _ := s.Create("чат", agent.DefaultConfig("deepseek-flash"))
+	if _, err := s.Append(chat.ID, Message{Role: "user", Kind: KindQuestion, Content: "вопрос"}); err != nil {
+		t.Fatalf("добавление: %v", err)
+	}
+	if _, err := s.ClearMessages(chat.ID); err != nil {
+		t.Fatalf("очистка: %v", err)
+	}
+	if err := s.Delete(chat.ID); err != nil {
+		t.Fatalf("удаление: %v", err)
+	}
+
+	if s.Profile().Style != "коротко" {
+		t.Fatalf("профиль не должен зависеть от судьбы чатов: %+v", s.Profile())
+	}
+}
+
+func TestSetProfileTrimsFields(t *testing.T) {
+	s, _ := Open("")
+
+	saved, err := s.SetProfile(Profile{About: "  делаю сам  ", Style: "   "})
+	if err != nil {
+		t.Fatalf("сохранение: %v", err)
+	}
+	if saved.About != "делаю сам" {
+		t.Fatalf("пробелы по краям должны срезаться: %q", saved.About)
+	}
+	if saved.Style != "" {
+		t.Fatalf("поле из одних пробелов -- пустое: %q", saved.Style)
+	}
+	if saved.Agent().Empty() {
+		t.Fatal("профиль с заполненным «о себе» пустым не считается")
+	}
+}

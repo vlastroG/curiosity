@@ -28,6 +28,7 @@ const (
 
 // contextParts -- всё, что уезжает в запрос, разложенное по слоям памяти.
 type contextParts struct {
+	Profile       Profile         // персонализация: кто пользователь и как ему удобнее
 	Summary       string          // краткосрочная: пересказ закрытого окна
 	Knowledge     []KnowledgeItem // долговременная: отобранные знания
 	Task          *Task           // рабочая: чеклист активной задачи
@@ -50,6 +51,12 @@ func buildMessages(question string, parts contextParts, cfg Config) []llm.Messag
 
 	system := func(content string) {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: content})
+	}
+
+	// персонализация: сразу после роли, чтобы читаться как уточнение к ней,
+	// а не как замена. Пустой профиль не добавляет в запрос ничего
+	if block := parts.Profile.Render(); block != "" {
+		system(block)
 	}
 
 	// долговременная память
@@ -129,6 +136,7 @@ func relatedNote(solved []Task, id string) string {
 // а не верить на слово, что память работает.
 func snapshotMemory(parts contextParts, summary string, history int) MemorySnapshot {
 	snapshot := MemorySnapshot{
+		Profile:         parts.Profile.Filled(),
 		WindowSummary:   strings.TrimSpace(summary) != "",
 		HistoryMessages: history,
 	}

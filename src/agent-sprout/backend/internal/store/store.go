@@ -29,6 +29,8 @@ type Store struct {
 	// order хранит порядок создания: map порядка не даёт, а список чатов
 	// должен быть стабильным между запросами
 	order []string
+	// profile -- персонализация: один на всё приложение, вне чатов
+	profile Profile
 	// knowledge -- долговременная память: общая для всех чатов и живёт отдельно
 	// от них, потому что не принадлежит ни одному разговору
 	knowledge []Knowledge
@@ -40,6 +42,7 @@ type Store struct {
 type snapshot struct {
 	Chats     []Chat      `json:"chats"`
 	Knowledge []Knowledge `json:"knowledge,omitempty"`
+	Profile   Profile     `json:"profile,omitempty"`
 }
 
 // Open поднимает хранилище из файла. Отсутствующий файл -- не ошибка: это первый запуск.
@@ -74,6 +77,7 @@ func Open(path string) (*Store, error) {
 		s.order = append(s.order, chat.ID)
 	}
 	s.knowledge = loaded.Knowledge
+	s.profile = loaded.Profile
 
 	return s, nil
 }
@@ -316,6 +320,7 @@ func (s *Store) persist() error {
 	all := snapshot{
 		Chats:     make([]Chat, 0, len(s.order)),
 		Knowledge: s.knowledge,
+		Profile:   s.profile,
 	}
 	for _, id := range s.order {
 		if chat, ok := s.chats[id]; ok {

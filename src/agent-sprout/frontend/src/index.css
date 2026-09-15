@@ -31,6 +31,8 @@
   /* цвета слоёв памяти */
   --blueprint: #5e8cb8;
   --concrete: #8c9196;
+  /* персонализация -- цвет сигнального жилета: на объекте так помечают человека */
+  --vest: #86a05c;
 
   --warn: #c96a2e;
   --fail: #b84a3e;
@@ -1012,6 +1014,9 @@ input[type='checkbox'] {
   font-size: 11px;
   cursor: help;
 }
+.memory__layer--profile {
+  border-left-color: var(--vest);
+}
 .memory__layer--long {
   border-left-color: var(--blueprint);
 }
@@ -1028,6 +1033,9 @@ input[type='checkbox'] {
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--text-muted);
+}
+.memory__layer--profile .memory__label {
+  color: var(--vest);
 }
 .memory__layer--long .memory__label {
   color: var(--blueprint);
@@ -1058,6 +1066,10 @@ input[type='checkbox'] {
 .chip--knowledge {
   border-color: var(--blueprint);
   color: var(--blueprint);
+}
+.chip--profile {
+  border-color: var(--vest);
+  color: var(--vest);
 }
 
 /* ---------- справочник знаний ---------- */
@@ -1179,4 +1191,13 @@ input[type='checkbox'] {
   margin-top: 0.35rem;
   font-size: 0.78rem;
   line-height: 1.4;
+}
+
+/* профиль переиспользует панель знаний: тот же жанр -- общая для всех чатов
+   форма в правой колонке */
+.knowledge__head .sidebar__title + .btn--ghost {
+  flex-shrink: 0;
+}
+.profile__preset-field {
+  margin-bottom: 4px;
 }
