@@ -44,6 +44,20 @@ const FIELDS = [
 
 const EMPTY = { about: '', style: '', format: '', limits: '' };
 
+// pick -- черновик собирается ТОЛЬКО из редактируемых полей.
+//
+// Сервер отдаёт профиль вместе со служебным updatedAt, и если завести черновик
+// из ответа целиком, это поле уедет обратно в PUT -- а там разбор с запретом
+// неизвестных полей, и сохранение отвалится с «unknown field updatedAt».
+// Поэтому граница проходит здесь: что редактируется, то и хранится в черновике.
+function pick(profile) {
+  const draft = { ...EMPTY };
+  for (const field of FIELDS) {
+    draft[field.key] = profile?.[field.key] ?? '';
+  }
+  return draft;
+}
+
 /** Заготовка профиля: показать целиком до того, как подставлять. */
 function Preset({ preset, busy, onApply }) {
   const [open, setOpen] = useState(false);
@@ -73,12 +87,12 @@ function Preset({ preset, busy, onApply }) {
 }
 
 export function ProfilePanel({ profile, presets, busy, error, onSave, onClose }) {
-  const [draft, setDraft] = useState(profile ?? EMPTY);
+  const [draft, setDraft] = useState(() => pick(profile));
 
   // профиль мог измениться на сервере (например, после сохранения) -- черновик
   // берётся заново, иначе форма будет спорить с тем, что реально применяется
   useEffect(() => {
-    setDraft({ ...EMPTY, ...(profile ?? {}) });
+    setDraft(pick(profile));
   }, [profile]);
 
   const dirty = FIELDS.some((field) => (draft[field.key] ?? '') !== (profile?.[field.key] ?? ''));
@@ -88,7 +102,7 @@ export function ProfilePanel({ profile, presets, busy, error, onSave, onClose })
 
   // заготовка подставляется в форму, а не сохраняется сама: что о себе рассказать,
   // решает пользователь, и перед сохранением он это увидит и поправит
-  const apply = (preset) => setDraft({ ...EMPTY, ...preset });
+  const apply = (preset) => setDraft(pick(preset));
 
   return (
     <aside className="knowledge" title={HINT}>
