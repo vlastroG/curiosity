@@ -138,8 +138,10 @@ export function ProfilePanel({ profile, presets, busy, error, onSave, onClose })
         {FIELDS.map((field) => (
           <label key={field.key} className="field">
             <span className="field__label">{field.label}</span>
+            {/* восемь строк: в каждое поле должен помещаться абзац-другой,
+                не заставляя листать внутри крошечного окошка */}
             <textarea
-              rows={3}
+              rows={8}
               value={draft[field.key] ?? ''}
               placeholder={field.placeholder}
               onChange={(event) => set(field.key, event.target.value)}
