@@ -829,6 +829,40 @@ input[type='checkbox'] {
   border-top: 1px solid var(--border);
   margin: 12px 0;
 }
+
+/* таблица прокручивается внутри своей обёртки: в плане работ бывает таблица
+   материалов на пять колонок, а колонка чата узкая -- распирать ею вёрстку нельзя */
+.md-table-wrap {
+  margin: 8px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.md-table th,
+.md-table td {
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.md-table th:last-child,
+.md-table td:last-child {
+  border-right: none;
+}
+.md-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.md-table th {
+  background: var(--panel-2);
+  color: var(--accent-dim);
+  font-weight: 600;
+  white-space: nowrap;
+}
 .md code {
   padding: 1px 4px;
   background: var(--bg);
