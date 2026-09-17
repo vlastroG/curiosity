@@ -71,6 +71,12 @@ func New(deps Deps) http.Handler {
 //
 // Откат нужен, потому что интерфейс -- одностраничное приложение: любой путь,
 // кроме реально существующего файла, должен вернуть ту же страницу.
+//
+// Заголовки кеширования здесь обязательны. Без Cache-Control браузер кеширует ответ
+// по эвристике -- на долю времени, прошедшего с Last-Modified. Для index.html это
+// ловушка: страница всего лишь указывает на бандл с хешем в имени, и закешированная
+// страница продолжает грузить СТАРЫЙ бандл. Правка интерфейса при этом не доезжает
+// до пользователя вообще, а выглядит как «починил, но не работает».
 func staticHandler(dir string) http.Handler {
 	if dir == "" {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,9 +90,26 @@ func staticHandler(dir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clean := filepath.Join(dir, filepath.Clean("/"+strings.TrimPrefix(r.URL.Path, "/")))
 		if info, err := os.Stat(clean); err == nil && !info.IsDir() {
+			w.Header().Set("Cache-Control", cacheControl(r.URL.Path))
 			files.ServeHTTP(w, r)
 			return
 		}
+
+		// страница-указатель: перепроверять при каждом заходе. Ревалидация дешёвая --
+		// Last-Modified отдаётся, и обычно это 304 без тела
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, index)
 	})
+}
+
+// cacheControl -- как долго файлу можно лежать в кеше браузера.
+//
+// Всё, что собрано сборщиком, лежит в /assets и содержит хеш содержимого в имени:
+// поменялось содержимое -- поменялось имя. Такое кешируется навсегда. Остальное
+// (favicon и прочие файлы с постоянным именем) -- только с перепроверкой.
+func cacheControl(path string) string {
+	if strings.HasPrefix(path, "/assets/") {
+		return "public, max-age=31536000, immutable"
+	}
+	return "no-cache"
 }
