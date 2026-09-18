@@ -102,20 +102,20 @@ func TestMachineForcedStepsOutrankTheDispatcher(t *testing.T) {
 		full.Requirements[i].Value = "значение"
 	}
 
-	event, to, ok := forcedStep(PhaseCollecting, full)
+	event, to, ok := forcedStep(PhaseCollecting, full, Change{})
 	if !ok || event != DecisionConfirm || to != PhaseConfirming {
 		t.Fatalf("полный чеклист обязан вести на сверку, получено %q → %q (ok=%v)", event, to, ok)
 	}
 
 	full.Phase = PhaseConfirming
-	event, to, ok = forcedStep(PhaseConfirming, full)
+	event, to, ok = forcedStep(PhaseConfirming, full, Change{})
 	if !ok || event != DecisionPlan || to != PhaseDone {
 		t.Fatalf("после сверки обязан идти план, получено %q → %q (ok=%v)", event, to, ok)
 	}
 
 	// незаполненный чеклист принуждения не даёт: идёт обычный сбор
 	half := *collecting(checklist(3))
-	if _, _, ok := forcedStep(PhaseCollecting, half); ok {
+	if _, _, ok := forcedStep(PhaseCollecting, half, Change{}); ok {
 		t.Fatal("с неполным чеклистом машина ничего не навязывает")
 	}
 }
@@ -136,7 +136,7 @@ func TestMachineRejectsEverythingOutsideTheTable(t *testing.T) {
 	for _, phase := range allPhases {
 		for _, event := range allEvents {
 			task.Phase = phase
-			_, ok := nextPhase(phase, event, task)
+			_, ok := nextPhase(phase, event, task, Change{})
 			if ok && !allowed[phase][event] {
 				t.Fatalf("разрешён переход вне таблицы: %q по %q", phase, event)
 			}

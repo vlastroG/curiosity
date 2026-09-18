@@ -30,13 +30,23 @@ func (p TaskPhase) Active() bool {
 	return p == PhaseCollecting || p == PhaseConfirming
 }
 
+// Change -- что случилось с данными задачи на этом ходе.
+//
+// Часть переходов зависит не от состояния задачи, а от того, что человек только что
+// сделал: на сверке одно и то же полное состояние означает разное в зависимости
+// от того, поправил он данные или согласился с ними.
+type Change struct {
+	// Corrected -- на этом ходе поправлено значение уже собранного пункта
+	Corrected bool
+}
+
 // transition -- разрешённый переход: из фазы по событию в фазу.
 type transition struct {
 	From  TaskPhase
 	Event Decision
 	To    TaskPhase
-	// When -- условие перехода по данным задачи. nil означает «разрешён всегда»
-	When func(Task) bool
+	// When -- условие перехода. nil означает «разрешён всегда»
+	When func(Task, Change) bool
 	// Forced -- переход, который машина делает сама, не спрашивая диспетчера.
 	// Именно на них держится «нельзя перепрыгнуть этап»: заявка модели
 	// на forced-переходах не спрашивается вовсе
@@ -44,10 +54,18 @@ type transition struct {
 }
 
 // ready -- чеклист исходных данных заполнен целиком.
-func ready(task Task) bool { return task.Ready() }
+func ready(task Task, _ Change) bool { return task.Ready() }
 
 // interviewDraggedOn -- опрос идёт дольше, чем имеет смысл.
-func interviewDraggedOn(task Task) bool { return task.CollectTurns > maxCollectTurns }
+func interviewDraggedOn(task Task, _ Change) bool { return task.CollectTurns > maxCollectTurns }
+
+// correctedInTime -- человек правит данные на сверке, и время на это ещё есть.
+//
+// Предохранитель тот же, что у сбора: бесконечная правка не должна запирать задачу
+// на сверке навсегда.
+func correctedInTime(task Task, change Change) bool {
+	return change.Corrected && !interviewDraggedOn(task, change)
+}
 
 // machine -- полная таблица переходов. Других переходов у задачи нет.
 var machine = []transition{
@@ -67,7 +85,12 @@ var machine = []transition{
 	{From: PhaseCollecting, Event: DecisionRefuseOffTopic, To: PhaseCollecting},
 	{From: PhaseCollecting, Event: DecisionAmbiguous, To: PhaseCollecting},
 
-	// сверка: собранное показано, следующий ход решает судьбу задачи
+	// сверка: собранное показано, следующий ход решает судьбу задачи.
+	//
+	// Правка идёт выше плана: forcedStep берёт первое совпадение, а «нет, площадь
+	// другая» обязано откладывать план, иначе сверка -- формальность, где ответ
+	// один и тот же, подтверждай или нет
+	{From: PhaseConfirming, Event: DecisionConfirm, To: PhaseConfirming, When: correctedInTime, Forced: true},
 	{From: PhaseConfirming, Event: DecisionPlan, To: PhaseDone, When: ready, Forced: true},
 	// на сверке пользователь может стереть значение -- тогда возвращаемся к сбору
 	{From: PhaseConfirming, Event: DecisionCollect, To: PhaseCollecting},
@@ -83,12 +106,12 @@ var machine = []transition{
 
 // nextPhase -- куда ведёт событие из этой фазы. ok=false означает, что такого
 // перехода нет: событие в этой фазе недопустимо.
-func nextPhase(from TaskPhase, event Decision, task Task) (TaskPhase, bool) {
+func nextPhase(from TaskPhase, event Decision, task Task, change Change) (TaskPhase, bool) {
 	for _, step := range machine {
 		if step.From != from || step.Event != event {
 			continue
 		}
-		if step.When != nil && !step.When(task) {
+		if step.When != nil && !step.When(task, change) {
 			continue
 		}
 		return step.To, true
@@ -100,12 +123,12 @@ func nextPhase(from TaskPhase, event Decision, task Task) (TaskPhase, bool) {
 //
 // Проверяется раньше заявки: именно здесь держится правило «сначала сверка,
 // потом план». Модель на этих переходах не спрашивают.
-func forcedStep(from TaskPhase, task Task) (Decision, TaskPhase, bool) {
+func forcedStep(from TaskPhase, task Task, change Change) (Decision, TaskPhase, bool) {
 	for _, step := range machine {
 		if !step.Forced || step.From != from {
 			continue
 		}
-		if step.When != nil && !step.When(task) {
+		if step.When != nil && !step.When(task, change) {
 			continue
 		}
 		return step.Event, step.To, true
@@ -132,5 +155,5 @@ func allowedEvents(from TaskPhase) []Decision {
 // Отдельная функция, потому что событие приходит не от модели, а от кнопки,
 // и спрашивает её хранилище. Таблица переходов при этом одна на всех.
 func CancelPhase(task Task) (TaskPhase, bool) {
-	return nextPhase(task.Phase, DecisionCancel, task)
+	return nextPhase(task.Phase, DecisionCancel, task, Change{})
 }

@@ -463,3 +463,103 @@ func TestGuardForgetsKnowledgeDeletedFromTheReference(t *testing.T) {
 		t.Fatalf("удаление из справочника -- не вина диспетчера: %v", verdict.Overrides)
 	}
 }
+
+// confirming -- задача на сверке: чеклист заполнен, собранное уже показано.
+func confirming(n int) *Task {
+	task := collecting(checklist(n))
+	task.Phase = PhaseConfirming
+	for i := range task.Requirements {
+		task.Requirements[i].Value = "значение"
+	}
+	return task
+}
+
+func TestGuardCorrectionOnReviewPostponesThePlan(t *testing.T) {
+	// «нет, площадь 20, а не 18» на сверке не должно немедленно давать план:
+	// иначе сверка -- формальность, где ответ один и тот же, подтверждай или нет
+	verdict := Guard(confirming(3), nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers:  []Answer{{Key: "а-пункт", Value: "другое значение"}},
+	}, fixedID())
+
+	if verdict.Decision != DecisionConfirm {
+		t.Fatalf("после правки собранное показывается заново, получено %q", verdict.Decision)
+	}
+	if verdict.Closing || verdict.Task.Phase != PhaseConfirming {
+		t.Fatalf("задача должна остаться на сверке: %+v", verdict.Task)
+	}
+	if verdict.Task.Requirements[0].Value != "другое значение" {
+		t.Fatalf("правка обязана примениться: %+v", verdict.Task.Requirements[0])
+	}
+	if len(verdict.Overrides) == 0 {
+		t.Fatal("откладывание плана должно быть видно в предупреждениях")
+	}
+}
+
+func TestGuardConfirmationWithoutChangesClosesTheTask(t *testing.T) {
+	// «да, всё верно» -- диспетчер повторяет те же значения, правки нет
+	verdict := Guard(confirming(3), nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers:  []Answer{{Key: "а-пункт", Value: "значение"}},
+	}, fixedID())
+
+	if verdict.Decision != DecisionPlan || !verdict.Closing {
+		t.Fatalf("подтверждение без правок закрывает задачу планом, получено %q", verdict.Decision)
+	}
+	if verdict.Task.Phase != PhaseDone {
+		t.Fatalf("фаза должна стать done, получено %q", verdict.Task.Phase)
+	}
+}
+
+func TestGuardAllowsMoreThanOneCorrection(t *testing.T) {
+	// шанс поправить не одноразовый: после первой правки можно сделать вторую
+	first := Guard(confirming(3), nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers:  []Answer{{Key: "а-пункт", Value: "первая правка"}},
+	}, fixedID())
+
+	second := Guard(first.Task, nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers:  []Answer{{Key: "б-пункт", Value: "вторая правка"}},
+	}, fixedID())
+
+	if second.Decision != DecisionConfirm || second.Closing {
+		t.Fatalf("вторая правка тоже откладывает план, получено %q", second.Decision)
+	}
+	if second.Task.Phase != PhaseConfirming {
+		t.Fatalf("задача должна остаться на сверке: %q", second.Task.Phase)
+	}
+}
+
+func TestGuardStopsPostponingWhenReviewDragsOn(t *testing.T) {
+	// предохранитель: бесконечная правка не должна запирать задачу на сверке
+	task := confirming(3)
+	task.CollectTurns = maxCollectTurns
+
+	verdict := Guard(task, nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers:  []Answer{{Key: "а-пункт", Value: "очередная правка"}},
+	}, fixedID())
+
+	if verdict.Decision != DecisionPlan || verdict.Task.Phase != PhaseDone {
+		t.Fatalf("после затянувшейся сверки план выдаётся, получено %q → %q",
+			verdict.Decision, verdict.Task.Phase)
+	}
+}
+
+func TestGuardFillingAnEmptyItemIsNotACorrection(t *testing.T) {
+	// заполнение пустого пункта -- это продолжение сбора, а не спор с собранным:
+	// чеклист становится полным, и машина ведёт на сверку, а не откладывает её
+	task := collecting(checklist(2))
+	task.Requirements[0].Value = "значение"
+
+	verdict := Guard(task, nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers:  []Answer{{Key: "б-пункт", Value: "теперь заполнено"}},
+	}, fixedID())
+
+	if verdict.Decision != DecisionConfirm || verdict.Task.Phase != PhaseConfirming {
+		t.Fatalf("полный чеклист ведёт на сверку, получено %q → %q",
+			verdict.Decision, verdict.Task.Phase)
+	}
+}

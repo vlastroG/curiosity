@@ -127,7 +127,7 @@ func guardWithTask(active Task, claim Routing, verdict Verdict) Verdict {
 	}
 
 	task.CollectTurns++
-	applyAnswers(&task, claim.Answers, &verdict)
+	change := Change{Corrected: applyAnswers(&task, claim.Answers, &verdict)}
 	addRequirements(&task, claim.Requirements, &verdict)
 	task.KnowledgeIDs = mergeIDs(task.KnowledgeIDs, refIDs(verdict.Knowledge))
 
@@ -138,7 +138,7 @@ func guardWithTask(active Task, claim Routing, verdict Verdict) Verdict {
 	}
 	task.Title = active.Title
 
-	applyPhase(&task, &verdict)
+	applyPhase(&task, change, &verdict)
 
 	verdict.Task = &task
 	return verdict
@@ -149,10 +149,10 @@ func guardWithTask(active Task, claim Routing, verdict Verdict) Verdict {
 //
 // Порядок именно такой: forced-переходы существуют затем, чтобы модель не могла
 // перепрыгнуть этап, поэтому её мнение на них не спрашивается вовсе.
-func applyPhase(task *Task, verdict *Verdict) {
-	if event, to, ok := forcedStep(task.Phase, *task); ok {
+func applyPhase(task *Task, change Change, verdict *Verdict) {
+	if event, to, ok := forcedStep(task.Phase, *task, change); ok {
 		if event != verdict.Decision {
-			verdict.note("%s", forcedNote(task.Phase, event, *task))
+			verdict.note("%s", forcedNote(task.Phase, event, *task, change))
 		}
 		verdict.Decision = event
 		task.Phase = to
@@ -160,14 +160,14 @@ func applyPhase(task *Task, verdict *Verdict) {
 		return
 	}
 
-	to, ok := nextPhase(task.Phase, verdict.Decision, *task)
+	to, ok := nextPhase(task.Phase, verdict.Decision, *task, change)
 	if !ok {
 		// заявка в этой фазе недопустима: продолжаем сбор, а расхождение пишем
 		// в предупреждения -- недетерминированность модели должна быть видна
 		verdict.note("решение %q недопустимо в фазе %q — продолжаю сбор",
 			verdict.Decision, task.Phase)
 		verdict.Decision = DecisionCollect
-		to, _ = nextPhase(task.Phase, DecisionCollect, *task)
+		to, _ = nextPhase(task.Phase, DecisionCollect, *task, change)
 	}
 
 	task.Phase = to
@@ -175,8 +175,10 @@ func applyPhase(task *Task, verdict *Verdict) {
 }
 
 // forcedNote объясняет в предупреждениях, почему машина решила за диспетчера.
-func forcedNote(from TaskPhase, event Decision, task Task) string {
+func forcedNote(from TaskPhase, event Decision, task Task, change Change) string {
 	switch {
+	case event == DecisionConfirm && change.Corrected:
+		return "данные поправлены на сверке — показываю список заново, план откладывается"
 	case event == DecisionConfirm:
 		// диспетчер способен пометить пункт собранным, когда пользователь о нём
 		// и не заикался, и без показа данных такая выдумка уедет прямо в план
@@ -215,7 +217,12 @@ func withoutPlaceholders(answers []Answer, verdict *Verdict) []Answer {
 	return kept
 }
 
-func applyAnswers(task *Task, answers []Answer, verdict *Verdict) {
+// Возвращает true, если ход поправил уже собранный пункт: значение было
+// непустым и стало другим. Заполнение пустого пункта и новый пункт правкой
+// не считаются -- это обычное продолжение сбора, а не спор с собранным.
+func applyAnswers(task *Task, answers []Answer, verdict *Verdict) bool {
+	corrected := false
+
 	for _, answer := range answers {
 		key := strings.TrimSpace(answer.Key)
 		value := strings.TrimSpace(answer.Value)
@@ -226,6 +233,10 @@ func applyAnswers(task *Task, answers []Answer, verdict *Verdict) {
 		found := false
 		for i := range task.Requirements {
 			if sameWork(task.Requirements[i].Key, key) {
+				was := strings.TrimSpace(task.Requirements[i].Value)
+				if was != "" && was != value {
+					corrected = true
+				}
 				task.Requirements[i].Value = value
 				found = true
 				break
@@ -240,6 +251,8 @@ func applyAnswers(task *Task, answers []Answer, verdict *Verdict) {
 			})
 		}
 	}
+
+	return corrected
 }
 
 // addRequirements дописывает новые пункты чеклиста.
