@@ -238,7 +238,7 @@ func (c Chat) ActiveTask() *agent.Task {
 func (c Chat) SolvedTasks() []agent.Task {
 	solved := make([]agent.Task, 0, len(c.Tasks))
 	for _, task := range c.Tasks {
-		if task.Status == agent.TaskDone && strings.TrimSpace(task.Summary) != "" {
+		if task.Phase == agent.PhaseDone && strings.TrimSpace(task.Summary) != "" {
 			solved = append(solved, task)
 		}
 	}
@@ -260,11 +260,15 @@ func (c *Chat) UpsertTask(task agent.Task) {
 // история диалога остаётся нетронутой.
 func (c *Chat) CancelTask(closedAt time.Time) bool {
 	for i := len(c.Tasks) - 1; i >= 0; i-- {
-		if c.Tasks[i].Active() {
-			c.Tasks[i].Status = agent.TaskCancelled
-			c.Tasks[i].ClosedAt = &closedAt
-			return true
+		// куда ведёт прерывание, решает та же таблица переходов, что и все
+		// остальные смены фазы: иначе у задачи было бы два хозяина
+		phase, ok := agent.CancelPhase(c.Tasks[i])
+		if !ok {
+			continue
 		}
+		c.Tasks[i].Phase = phase
+		c.Tasks[i].ClosedAt = &closedAt
+		return true
 	}
 	return false
 }

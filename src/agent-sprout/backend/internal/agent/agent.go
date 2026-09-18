@@ -119,7 +119,7 @@ type MemorySnapshot struct {
 	Knowledge []KnowledgeRef `json:"knowledge,omitempty"`
 	// рабочая: чеклист задачи на момент ответа
 	TaskTitle    string        `json:"taskTitle,omitempty"`
-	TaskStatus   TaskStatus    `json:"taskStatus,omitempty"`
+	TaskPhase    TaskPhase     `json:"taskPhase,omitempty"`
 	Requirements []Requirement `json:"requirements,omitempty"`
 	// персонализация: какие секции профиля уехали в запрос
 	Profile []string `json:"profile,omitempty"`

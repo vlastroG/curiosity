@@ -17,15 +17,10 @@ import (
 // цикл задаёт слои: рабочая память живёт ровно столько, сколько задача, а её итог
 // переезжает в краткосрочную память диалога.
 
-type TaskStatus string
-
-const (
-	TaskCollecting TaskStatus = "collecting" // собираем исходные данные
-	TaskDone       TaskStatus = "done"       // план выдан, задача закрыта
-	TaskCancelled  TaskStatus = "cancelled"  // пользователь прервал
-)
-
-// Decision -- что агент делает на этом ходе.
+// Decision -- событие, которое пытается сменить фазу задачи.
+//
+// Почти все приходят от диспетчера, то есть от модели. Что из них разрешено
+// в текущей фазе, решает таблица переходов в task_machine.go.
 type Decision string
 
 const (
@@ -36,6 +31,8 @@ const (
 	DecisionRefuseOffTopic Decision = "refuse_offtopic"
 	DecisionRefuseSecond   Decision = "refuse_second"
 	DecisionAmbiguous      Decision = "ambiguous"
+	// DecisionCancel приходит не от модели, а от кнопки «прервать»
+	DecisionCancel Decision = "cancel"
 )
 
 // Requirement -- один пункт исходных данных: что нужно узнать и что уже узнали.
@@ -57,9 +54,9 @@ type Answer struct {
 
 // Task -- один вид работ от инициализации до плана.
 type Task struct {
-	ID     string     `json:"id"`
-	Title  string     `json:"title"`
-	Status TaskStatus `json:"status"`
+	ID    string    `json:"id"`
+	Title string    `json:"title"`
+	Phase TaskPhase `json:"phase"`
 	// Requirements -- рабочая память задачи
 	Requirements []Requirement `json:"requirements"`
 	// KnowledgeIDs -- какие знания долговременной памяти отобраны под эту задачу
@@ -67,14 +64,14 @@ type Task struct {
 	// Summary -- пересказ решённой задачи, дальше живёт как память диалога
 	Summary string `json:"summary,omitempty"`
 	// CollectTurns -- сколько ходов уже идёт опрос; нужен предохранителю
-	CollectTurns int `json:"collectTurns"`
-	// Confirmed -- собранные данные показаны пользователю и он их подтвердил.
-	// Обязательный шаг между заполненным чеклистом и планом: диспетчер способен
-	// пометить пункт собранным, когда пользователь о нём и не заикался, и без
-	// сверки такая выдумка уедет прямо в план
-	Confirmed bool       `json:"confirmed"`
-	StartedAt time.Time  `json:"startedAt"`
-	ClosedAt  *time.Time `json:"closedAt,omitempty"`
+	CollectTurns int        `json:"collectTurns"`
+	StartedAt    time.Time  `json:"startedAt"`
+	ClosedAt     *time.Time `json:"closedAt,omitempty"`
+	// LegacyStatus -- как фаза называлась до того, как стала полем phase.
+	// Только для чтения старых снапшотов: сами мы его никогда не заполняем,
+	// поэтому omitempty держит его вне новых записей. Хранилище переносит
+	// значение в Phase при загрузке и обнуляет
+	LegacyStatus TaskPhase `json:"status,omitempty"`
 }
 
 // Filled -- сколько пунктов чеклиста уже заполнено.
@@ -108,7 +105,7 @@ func (t Task) Ready() bool {
 }
 
 // Active -- задача ещё в работе.
-func (t Task) Active() bool { return t.Status == TaskCollecting }
+func (t Task) Active() bool { return t.Phase.Active() }
 
 // KnowledgeItem -- запись долговременной памяти в том виде, в каком её видит агент.
 type KnowledgeItem struct {

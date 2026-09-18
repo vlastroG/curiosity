@@ -327,8 +327,8 @@ export default function App() {
                 toggle: toggleCheckpoint,
               }}
               task={{
-                active: chat.tasks?.find((item) => item.status === 'collecting') ?? null,
-                solved: (chat.tasks ?? []).filter((item) => item.status === 'done' && item.summary),
+                active: (chat.tasks ?? []).find(isActiveTask) ?? null,
+                solved: (chat.tasks ?? []).filter((item) => item.phase === 'done' && item.summary),
                 knowledge: knowledgeFor(chat, knowledge),
                 busy: taskBusy,
               }}
@@ -382,6 +382,13 @@ export default function App() {
   );
 }
 
+// активные фазы задачи -- те, в которых она ещё принимает сообщения. Список
+// один в один с таблицей переходов на бэкенде: там же решается, куда задача
+// может двинуться дальше
+const ACTIVE_PHASES = ['collecting', 'confirming'];
+
+const isActiveTask = (task) => ACTIVE_PHASES.includes(task.phase);
+
 // profileFilled -- заполнен ли профиль хоть чем-то. Отметка на кнопке отвечает
 // на вопрос «действует он сейчас или нет» без открывания панели
 function profileFilled(profile) {
@@ -396,7 +403,7 @@ function profileFilled(profile) {
  * надо актуальные, а не копию на момент отбора.
  */
 function knowledgeFor(chat, knowledge) {
-  const active = chat.tasks?.find((item) => item.status === 'collecting');
+  const active = (chat.tasks ?? []).find(isActiveTask);
   if (!active?.knowledgeIds?.length) return [];
   return knowledge.filter((item) => active.knowledgeIds.includes(item.id));
 }

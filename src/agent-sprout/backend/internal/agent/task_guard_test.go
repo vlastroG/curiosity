@@ -30,7 +30,7 @@ func collecting(reqs []Requirement) *Task {
 	return &Task{
 		ID:           "task-1",
 		Title:        "штукатурные работы",
-		Status:       TaskCollecting,
+		Phase:        PhaseCollecting,
 		Requirements: reqs,
 		CollectTurns: 1,
 	}
@@ -214,11 +214,11 @@ func TestGuardConfirmsBeforePlanning(t *testing.T) {
 	if full.Decision != DecisionConfirm {
 		t.Fatalf("заполненный чеклист ведёт на сверку, получено %q", full.Decision)
 	}
-	if full.Closing || full.Task.Status != TaskCollecting {
+	if full.Closing {
 		t.Fatalf("на сверке задача ещё не закрывается: %+v", full.Task)
 	}
-	if !full.Task.Confirmed {
-		t.Fatal("после сверки задача должна быть помечена подтверждённой")
+	if full.Task.Phase != PhaseConfirming {
+		t.Fatalf("фаза должна стать сверкой, получено %q", full.Task.Phase)
 	}
 
 	// следующий ход с полным чеклистом -- уже план
@@ -226,7 +226,7 @@ func TestGuardConfirmsBeforePlanning(t *testing.T) {
 	if planned.Decision != DecisionPlan {
 		t.Fatalf("после сверки идёт план, получено %q", planned.Decision)
 	}
-	if !planned.Closing || planned.Task.Status != TaskDone {
+	if !planned.Closing || planned.Task.Phase != PhaseDone {
 		t.Fatalf("задача должна закрываться: %+v", planned.Task)
 	}
 }
@@ -235,7 +235,7 @@ func TestGuardReturnsToCollectingIfConfirmationBrokeData(t *testing.T) {
 	// пользователь на сверке сказал «нет, температуру я не называл» -- значит пункт
 	// снова пуст, и план откладывается
 	active := collecting(checklist(3))
-	active.Confirmed = true
+	active.Phase = PhaseConfirming
 	for i := range active.Requirements {
 		active.Requirements[i].Value = "значение"
 	}
@@ -306,7 +306,7 @@ func TestGuardDropsInventedKnowledge(t *testing.T) {
 }
 
 func TestGuardDropsForeignRelatedTask(t *testing.T) {
-	solved := []Task{{ID: "t-старая", Title: "кладка", Status: TaskDone, Summary: "итог"}}
+	solved := []Task{{ID: "t-старая", Title: "кладка", Phase: PhaseDone, Summary: "итог"}}
 
 	verdict := Guard(nil, solved, nil, Routing{
 		Decision:      DecisionStart,
@@ -387,9 +387,9 @@ func TestGuardKeepsPlaceholderAnswersWhileCollecting(t *testing.T) {
 	// а вот на опросе «не знаю» -- законный ответ: вопрос задан, ответа нет,
 	// и в план это уедет отдельным допущением
 	task := &Task{
-		ID:     "t1",
-		Title:  "стяжка пола",
-		Status: TaskCollecting,
+		ID:    "t1",
+		Title: "стяжка пола",
+		Phase: PhaseCollecting,
 		Requirements: []Requirement{
 			{Key: "основание", Question: "какое основание?"},
 			{Key: "площадь", Question: "сколько квадратов?", Value: "24 квадрата"},
@@ -419,7 +419,7 @@ func TestGuardKeepsKnowledgeAttachedToTheTask(t *testing.T) {
 	task := &Task{
 		ID:           "t1",
 		Title:        "штукатурка стен",
-		Status:       TaskCollecting,
+		Phase:        PhaseCollecting,
 		Requirements: checklist(5),
 		KnowledgeIDs: []string{"k1"},
 	}
@@ -445,7 +445,7 @@ func TestGuardForgetsKnowledgeDeletedFromTheReference(t *testing.T) {
 	task := &Task{
 		ID:           "t1",
 		Title:        "штукатурка стен",
-		Status:       TaskCollecting,
+		Phase:        PhaseCollecting,
 		Requirements: checklist(5),
 		KnowledgeIDs: []string{"k-удалённое"},
 	}

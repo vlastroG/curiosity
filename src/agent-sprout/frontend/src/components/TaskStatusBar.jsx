@@ -39,15 +39,11 @@ const STATES = {
   },
 };
 
+// фаза приходит с сервера полем, а не вычисляется здесь: её выбирает машина
+// состояний задачи, и второе мнение на этот счёт интерфейсу иметь незачем
 function stateOf(task) {
   if (!task) return 'idle';
-  if (task.status === 'cancelled') return 'cancelled';
-  if (task.status !== 'collecting') return 'done';
-
-  // чеклист заполнен, но задача ещё открыта -- значит идёт сверка перед планом
-  const reqs = task.requirements ?? [];
-  const full = reqs.length > 0 && reqs.every((req) => Boolean(req.value));
-  return full ? 'confirming' : 'collecting';
+  return STATES[task.phase] ? task.phase : 'done';
 }
 
 /** Чеклист исходных данных — рабочая память задачи. */

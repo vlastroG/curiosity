@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -350,9 +351,9 @@ func TestCloneMakesAnIndependentBranch(t *testing.T) {
 	}
 	if _, err := s.Update(source.ID, func(chat *Chat) error {
 		chat.Tasks = []agent.Task{{
-			ID:     "t1",
-			Title:  "штукатурные работы",
-			Status: agent.TaskCollecting,
+			ID:    "t1",
+			Title: "штукатурные работы",
+			Phase: agent.PhaseCollecting,
 			Requirements: []agent.Requirement{
 				{Key: "основание", Question: "из чего стены?", Value: "кирпич"},
 				{Key: "площадь", Question: "сколько квадратов?"},
@@ -440,9 +441,9 @@ func TestCloneOfCloneKeepsLineage(t *testing.T) {
 func TestActiveAndSolvedTasksAreSeparated(t *testing.T) {
 	closed := time.Now()
 	chat := Chat{Tasks: []agent.Task{
-		{ID: "t1", Title: "монолит", Status: agent.TaskDone, Summary: "итог монолита", ClosedAt: &closed},
-		{ID: "t2", Title: "брошенная", Status: agent.TaskCancelled, ClosedAt: &closed},
-		{ID: "t3", Title: "штукатурка", Status: agent.TaskCollecting},
+		{ID: "t1", Title: "монолит", Phase: agent.PhaseDone, Summary: "итог монолита", ClosedAt: &closed},
+		{ID: "t2", Title: "брошенная", Phase: agent.PhaseCancelled, ClosedAt: &closed},
+		{ID: "t3", Title: "штукатурка", Phase: agent.PhaseCollecting},
 	}}
 
 	active := chat.ActiveTask()
@@ -464,7 +465,7 @@ func TestCancelTaskFreesWorkingMemory(t *testing.T) {
 		t.Fatalf("подготовка: %v", err)
 	}
 	if _, err := s.Update(chat.ID, func(c *Chat) error {
-		c.Tasks = []agent.Task{{ID: "t1", Title: "штукатурка", Status: agent.TaskCollecting}}
+		c.Tasks = []agent.Task{{ID: "t1", Title: "штукатурка", Phase: agent.PhaseCollecting}}
 		return nil
 	}); err != nil {
 		t.Fatalf("подготовка задачи: %v", err)
@@ -502,7 +503,7 @@ func TestClearMessagesWipesMemory(t *testing.T) {
 		t.Fatalf("подготовка: %v", err)
 	}
 	if _, err := s.Update(chat.ID, func(c *Chat) error {
-		c.Tasks = []agent.Task{{ID: "t1", Title: "штукатурка", Status: agent.TaskDone, Summary: "итог"}}
+		c.Tasks = []agent.Task{{ID: "t1", Title: "штукатурка", Phase: agent.PhaseDone, Summary: "итог"}}
 		return nil
 	}); err != nil {
 		t.Fatalf("подготовка памяти: %v", err)
@@ -664,5 +665,51 @@ func TestSetProfileTrimsFields(t *testing.T) {
 	}
 	if saved.Agent().Empty() {
 		t.Fatal("профиль с заполненным «о себе» пустым не считается")
+	}
+}
+
+func TestLoadRestoresPhasesFromOldSnapshot(t *testing.T) {
+	// снапшот, записанный до того, как фаза стала полем: у задач лежит "status",
+	// а "phase" ещё нет. Без переноса закрытая задача приедет с пустой фазой
+	// и будет считаться активной
+	path := filepath.Join(t.TempDir(), "chats.json")
+	old := `{"chats":[{"id":"c1","title":"чат","config":{},"tasks":[
+		{"id":"t1","title":"кладка","status":"done","requirements":[],"summary":"итог"},
+		{"id":"t2","title":"брошенная","status":"cancelled","requirements":[]},
+		{"id":"t3","title":"сбор","status":"collecting","requirements":[{"key":"а","question":"?"}]},
+		{"id":"t4","title":"сверка","status":"collecting","requirements":[{"key":"а","question":"?","value":"есть"}]}
+	]}]}`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatalf("подготовка снапшота: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("открытие: %v", err)
+	}
+
+	chat, err := s.Get("c1")
+	if err != nil {
+		t.Fatalf("чат не нашёлся: %v", err)
+	}
+
+	want := []agent.TaskPhase{
+		agent.PhaseDone,
+		agent.PhaseCancelled,
+		agent.PhaseCollecting,
+		// полный чеклист раньше означал сверку -- восстанавливаем тем же правилом
+		agent.PhaseConfirming,
+	}
+	for i, phase := range want {
+		if chat.Tasks[i].Phase != phase {
+			t.Fatalf("задача %s: фаза %q, ожидалась %q", chat.Tasks[i].ID, chat.Tasks[i].Phase, phase)
+		}
+		if chat.Tasks[i].LegacyStatus != agent.PhaseNone {
+			t.Fatalf("старое поле должно обнуляться, осталось %q", chat.Tasks[i].LegacyStatus)
+		}
+	}
+
+	if active := chat.ActiveTask(); active == nil || active.ID != "t4" {
+		t.Fatalf("активной должна быть последняя незакрытая задача, получено %+v", active)
 	}
 }

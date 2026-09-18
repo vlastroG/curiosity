@@ -73,6 +73,7 @@ func Open(path string) (*Store, error) {
 
 	for i := range loaded.Chats {
 		chat := loaded.Chats[i]
+		restorePhases(&chat)
 		s.chats[chat.ID] = &chat
 		s.order = append(s.order, chat.ID)
 	}
@@ -80,6 +81,34 @@ func Open(path string) (*Store, error) {
 	s.profile = loaded.Profile
 
 	return s, nil
+}
+
+// restorePhases поднимает фазу у задач, записанных до того, как фаза стала полем.
+//
+// Раньше в снапшоте лежали "status" и "confirmed", и «сверка» из них выводилась.
+// Без этого переноса старая задача приедет с пустой фазой и будет выглядеть
+// закрытой. Код временный: он нужен ровно до тех пор, пока живы чаты той поры.
+func restorePhases(chat *Chat) {
+	for i := range chat.Tasks {
+		task := &chat.Tasks[i]
+		if task.Phase != agent.PhaseNone {
+			continue
+		}
+		switch {
+		case task.LegacyStatus != agent.PhaseNone:
+			task.Phase = task.LegacyStatus
+			// «сверка» отдельным значением не хранилась, она выводилась
+			// из полного чеклиста -- восстанавливаем тем же правилом
+			if task.Phase == agent.PhaseCollecting && task.Ready() {
+				task.Phase = agent.PhaseConfirming
+			}
+			task.LegacyStatus = agent.PhaseNone
+		case task.ClosedAt != nil:
+			task.Phase = agent.PhaseDone
+		default:
+			task.Phase = agent.PhaseCollecting
+		}
+	}
 }
 
 // Now -- часы хранилища. Вынесены наружу, чтобы вызывающий проставлял время теми же

@@ -149,7 +149,7 @@ func snapshotMemory(parts contextParts, summary string, history int) MemorySnaps
 	}
 	if parts.Task != nil {
 		snapshot.TaskTitle = parts.Task.Title
-		snapshot.TaskStatus = parts.Task.Status
+		snapshot.TaskPhase = parts.Task.Phase
 		snapshot.Requirements = parts.Task.Requirements
 	}
 

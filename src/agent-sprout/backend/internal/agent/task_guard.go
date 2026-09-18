@@ -12,6 +12,11 @@ import (
 // и той же реплике он сегодня вернёт «собираем», завтра «выдаём план». Поэтому его
 // ответ считается заявкой, а не решением. Что произойдёт на самом деле, решает эта
 // функция -- чистая, без вызовов модели, целиком покрываемая таблицей тестов.
+//
+// Сами разрешённые переходы страж не хранит: они лежат таблицей в task_machine.go.
+// Здесь остаётся вторая половина работы -- привести заявку в порядок (заголовок
+// неизменяем, чеклист не сокращается, выдуманные ссылки отбрасываются) и спросить
+// у машины, что из заявленного вообще допустимо в текущей фазе.
 
 // Verdict -- разрешённое решение вместе с состоянием задачи после перехода.
 type Verdict struct {
@@ -72,7 +77,7 @@ func guardWithoutTask(claim Routing, verdict Verdict, newID func() string) Verdi
 	task := &Task{
 		ID:           newID(),
 		Title:        title,
-		Status:       TaskCollecting,
+		Phase:        PhaseCollecting,
 		Requirements: requirements,
 		CollectTurns: 1,
 	}
@@ -133,33 +138,55 @@ func guardWithTask(active Task, claim Routing, verdict Verdict) Verdict {
 	}
 	task.Title = active.Title
 
-	switch {
-	case task.Ready() && !task.Confirmed:
-		// чеклист заполнен, но между сбором и планом обязателен ход сверки:
-		// диспетчер способен пометить пункт собранным, когда пользователь о нём
-		// и не заикался, и без показа данных такая выдумка уедет прямо в план
-		verdict.Decision = DecisionConfirm
-		task.Confirmed = true
-
-	case task.Ready():
-		// критерий окончания сбора: чеклист заполнен и данные сверены. Считает код
-		verdict.Decision = DecisionPlan
-		verdict.Closing = true
-
-	case task.CollectTurns > maxCollectTurns:
-		// предохранитель от бесконечного опроса
-		verdict.note("опрос идёт %d %s, а чеклист не полон — перехожу к плану с допущениями",
-			task.CollectTurns, Plural(task.CollectTurns, "ход", "хода", "ходов"))
-		verdict.Decision = DecisionPlan
-		verdict.Closing = true
-	}
-
-	if verdict.Closing {
-		task.Status = TaskDone
-	}
+	applyPhase(&task, &verdict)
 
 	verdict.Task = &task
 	return verdict
+}
+
+// applyPhase -- собственно переход. Сперва спрашиваем машину, не обязана ли она
+// сменить фазу сама; если нет -- проверяем заявку диспетчера по той же таблице.
+//
+// Порядок именно такой: forced-переходы существуют затем, чтобы модель не могла
+// перепрыгнуть этап, поэтому её мнение на них не спрашивается вовсе.
+func applyPhase(task *Task, verdict *Verdict) {
+	if event, to, ok := forcedStep(task.Phase, *task); ok {
+		if event != verdict.Decision {
+			verdict.note("%s", forcedNote(task.Phase, event, *task))
+		}
+		verdict.Decision = event
+		task.Phase = to
+		verdict.Closing = to == PhaseDone
+		return
+	}
+
+	to, ok := nextPhase(task.Phase, verdict.Decision, *task)
+	if !ok {
+		// заявка в этой фазе недопустима: продолжаем сбор, а расхождение пишем
+		// в предупреждения -- недетерминированность модели должна быть видна
+		verdict.note("решение %q недопустимо в фазе %q — продолжаю сбор",
+			verdict.Decision, task.Phase)
+		verdict.Decision = DecisionCollect
+		to, _ = nextPhase(task.Phase, DecisionCollect, *task)
+	}
+
+	task.Phase = to
+	verdict.Closing = to == PhaseDone
+}
+
+// forcedNote объясняет в предупреждениях, почему машина решила за диспетчера.
+func forcedNote(from TaskPhase, event Decision, task Task) string {
+	switch {
+	case event == DecisionConfirm:
+		// диспетчер способен пометить пункт собранным, когда пользователь о нём
+		// и не заикался, и без показа данных такая выдумка уедет прямо в план
+		return "чеклист заполнен — перед планом обязательна сверка"
+	case from == PhaseCollecting:
+		return fmt.Sprintf("опрос идёт %d %s, а чеклист не полон — перехожу к плану с допущениями",
+			task.CollectTurns, Plural(task.CollectTurns, "ход", "хода", "ходов"))
+	default:
+		return "данные сверены — выдаю план"
+	}
 }
 
 // applyAnswers заполняет пункты чеклиста.
