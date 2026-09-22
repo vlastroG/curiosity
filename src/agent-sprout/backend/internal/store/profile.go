@@ -16,6 +16,7 @@ import (
 // Profile -- предпочтения пользователя. Каждое поле -- просто текст.
 type Profile struct {
 	About  string `json:"about"`
+	City   string `json:"city"`
 	Style  string `json:"style"`
 	Format string `json:"format"`
 	Limits string `json:"limits"`
@@ -25,7 +26,7 @@ type Profile struct {
 
 // Agent -- профиль в том виде, в каком его видит агент: без служебных дат.
 func (p Profile) Agent() agent.Profile {
-	return agent.Profile{About: p.About, Style: p.Style, Format: p.Format, Limits: p.Limits}
+	return agent.Profile{About: p.About, City: p.City, Style: p.Style, Format: p.Format, Limits: p.Limits}
 }
 
 // Profile возвращает текущий профиль.
@@ -46,6 +47,7 @@ func (s *Store) SetProfile(profile Profile) (Profile, error) {
 
 	now := s.now()
 	profile.About = strings.TrimSpace(profile.About)
+	profile.City = strings.TrimSpace(profile.City)
 	profile.Style = strings.TrimSpace(profile.Style)
 	profile.Format = strings.TrimSpace(profile.Format)
 	profile.Limits = strings.TrimSpace(profile.Limits)

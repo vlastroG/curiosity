@@ -8,9 +8,26 @@ services:
     environment:
       # адрес приложения нужен OpenRouter для атрибуции запросов
       APP_URL: http://localhost:5173
+      # MCP-сервер погоды: отсюда модель берёт фактические условия на объекте
+      MCP_WEATHER_URL: http://mcp-weather:8080/mcp
     volumes:
       # чаты и настройки переживают пересборку контейнера
       - agent-sprout-data:/data
+    depends_on:
+      mcp-weather:
+        condition: service_healthy
+
+  # Наружу не публикуется: сервер нужен только бэкенду. Чтобы потрогать его
+  # curl'ом, временно добавьте сюда ports: ["8765:8080"].
+  mcp-weather:
+    build: ../mcp-weather
+    healthcheck:
+      # своя ручка здоровья, не MCP: compose не обязан знать про протокол
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
 
 volumes:
   agent-sprout-data:

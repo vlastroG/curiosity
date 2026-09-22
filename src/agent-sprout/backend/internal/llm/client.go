@@ -173,30 +173,43 @@ func (c *Client) do(ctx context.Context, p Provider, payload []byte) (Response, 
 	choice := parsed.Choices[0]
 	return Response{
 		Text:         choice.Message.Content,
+		ToolCalls:    choice.Message.ToolCalls,
 		FinishReason: choice.FinishReason,
 		Usage:        parsed.Usage,
 	}, nil
 }
 
-// degradation -- какие ускоряющие параметры этот провайдер не принимает.
+// degradation -- какие необязательные параметры этот провайдер не принимает.
 //
-// Два поля, а не один флаг, ровно из-за DeepSeek: json-схему он отвергает,
+// Поля отдельные, а не один флаг, ровно из-за DeepSeek: json-схему он отвергает,
 // а выключатель рассуждения принимает. Скинуть их вместе значило бы вернуть себе
 // то самое рассуждение на служебных вызовах, ради которого всё и затевалось.
+//
+// Инструменты здесь третьей осью по той же причине: отказ провайдера от tools
+// не должен заодно отбирать схему у диспетчера. Цена отказа при этом больше,
+// чем у остальных: без инструментов модель не узнает погоду и спросит про неё
+// человека -- ход пройдёт, но беднее.
 type degradation struct {
 	schema   bool
 	thinking bool
+	tools    bool
 }
 
-func (d degradation) any() bool { return d.schema || d.thinking }
+func (d degradation) any() bool { return d.schema || d.thinking || d.tools }
 
 func (d degradation) with(other degradation) degradation {
-	return degradation{schema: d.schema || other.schema, thinking: d.thinking || other.thinking}
+	return degradation{
+		schema:   d.schema || other.schema,
+		thinking: d.thinking || other.thinking,
+		tools:    d.tools || other.tools,
+	}
 }
 
 // covers -- всё из other уже отброшено, повторять нечего
 func (d degradation) covers(other degradation) bool {
-	return (!other.schema || d.schema) && (!other.thinking || d.thinking)
+	return (!other.schema || d.schema) &&
+		(!other.thinking || d.thinking) &&
+		(!other.tools || d.tools)
 }
 
 // onlyPresent оставляет то, что в этом запросе действительно отправлялось
@@ -204,12 +217,15 @@ func (d degradation) onlyPresent(req Request) degradation {
 	return degradation{
 		schema:   d.schema && req.Schema != nil,
 		thinking: d.thinking && req.Thinking != "",
+		tools:    d.tools && len(req.Tools) > 0,
 	}
 }
 
 // touches -- отбросили ли мы что-то, что в этом запросе было
 func (d degradation) touches(req Request) bool {
-	return (d.schema && req.Schema != nil) || (d.thinking && req.Thinking != "")
+	return (d.schema && req.Schema != nil) ||
+		(d.thinking && req.Thinking != "") ||
+		(d.tools && len(req.Tools) > 0)
 }
 
 // wire переводит запрос в тело провайдера. drop -- что провайдер уже отвергал:
@@ -242,6 +258,25 @@ func wire(req Request, drop degradation) wireRequest {
 		// и оно там есть
 		out.ResponseFormat = &wireRespFmt{Type: "json_object"}
 	}
+
+	if len(req.Tools) > 0 && !drop.tools {
+		out.Tools = make([]wireTool, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			out.Tools = append(out.Tools, wireTool{
+				Type: "function",
+				Function: wireToolFunction{
+					Name:        tool.Name,
+					Description: tool.Description,
+					Parameters:  tool.Parameters,
+				},
+			})
+		}
+		out.ToolChoice = req.ToolChoice
+		if out.ToolChoice == "" {
+			out.ToolChoice = ToolChoiceAuto
+		}
+	}
+
 	return out
 }
 
@@ -259,13 +294,14 @@ func rejectedParameter(err error) degradation {
 
 	schema := containsAny(body, "response_format", "json_schema", "structured_output")
 	thinking := containsAny(body, "thinking", "reasoning")
-	if schema || thinking {
-		return degradation{schema: schema, thinking: thinking}
+	tools := containsAny(body, "tool", "function call", "function_call")
+	if schema || thinking || tools {
+		return degradation{schema: schema, thinking: thinking, tools: tools}
 	}
 
 	if containsAny(body, "not supported", "unsupported", "unrecognized",
 		"unknown parameter", "unknown field", "extra inputs") {
-		return degradation{schema: true, thinking: true}
+		return degradation{schema: true, thinking: true, tools: true}
 	}
 	return degradation{}
 }

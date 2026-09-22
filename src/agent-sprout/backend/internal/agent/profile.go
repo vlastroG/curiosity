@@ -17,6 +17,11 @@ import (
 type Profile struct {
 	// About -- кто пользователь: опыт, обстоятельства, объект
 	About string `json:"about"`
+	// City -- где он строит. Отдельным полем, а не внутри "о себе", потому что
+	// это единственная секция профиля, которую читает не только модель: из неё
+	// берётся место для запроса погоды, и разбирать его из свободного текста
+	// значило бы гадать
+	City string `json:"city"`
 	// Style -- как говорить: язык, тон, глубина объяснений
 	Style string `json:"style"`
 	// Format -- как оформлять ответ: списки, таблицы, длина
@@ -34,6 +39,7 @@ var profileSections = []struct {
 	fact bool
 }{
 	{"о себе", func(p Profile) string { return p.About }, true},
+	{"город", func(p Profile) string { return p.City }, true},
 	{"стиль", func(p Profile) string { return p.Style }, false},
 	{"формат", func(p Profile) string { return p.Format }, false},
 	{"ограничения", func(p Profile) string { return p.Limits }, true},

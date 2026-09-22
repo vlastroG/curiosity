@@ -74,13 +74,23 @@ func (f *fakeLLM) answerCalls() []llm.Request {
 	return calls
 }
 
+// timeFixture -- момент, на который считается стоимость во всех тестах:
+// будний день, пиковый тариф.
+func timeFixture() time.Time { return time.Date(2026, 9, 7, 2, 0, 0, 0, time.UTC) }
+
 func newTestAgent(fake *fakeLLM) *Agent {
+	return newToolAgent(fake, nil)
+}
+
+// newToolAgent -- агент с набором инструментов. Отдельный конструктор, чтобы
+// десятки тестов, которым инструменты не нужны, не перечисляли nil.
+func newToolAgent(fake *fakeLLM, tools ToolBox) *Agent {
 	brain := New(fake, map[string]llm.Provider{
 		llm.ProviderDeepSeek: llm.DeepSeek("test-key"),
-	})
+	}, tools)
 	// фиксированное время: расчёт стоимости не должен зависеть от того,
 	// когда запускаются тесты
-	brain.now = func() time.Time { return time.Date(2026, 9, 7, 2, 0, 0, 0, time.UTC) }
+	brain.now = timeFixture
 	return brain
 }
 
@@ -210,7 +220,7 @@ func TestRunWithoutHistoryDepthSendsOnlyQuestion(t *testing.T) {
 func TestRunUnavailableModel(t *testing.T) {
 	fake := &fakeLLM{}
 	// провайдер OpenRouter не передан вовсе
-	brain := New(fake, map[string]llm.Provider{llm.ProviderDeepSeek: llm.DeepSeek("test-key")})
+	brain := New(fake, map[string]llm.Provider{llm.ProviderDeepSeek: llm.DeepSeek("test-key")}, nil)
 
 	// конфиг берём целиком от этой модели: с чужим бюджетом вывода запрос упёрся бы
 	// в окно контекста раньше, чем дошёл до провайдера

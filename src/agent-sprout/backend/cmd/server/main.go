@@ -21,6 +21,7 @@ import (
 	"agent-sprout/internal/httpapi"
 	"agent-sprout/internal/llm"
 	"agent-sprout/internal/store"
+	"agent-sprout/internal/weather"
 )
 
 func main() {
@@ -41,13 +42,27 @@ func run() error {
 	// а стриминга здесь нет -- ответ приходит целиком или не приходит вовсе
 	timeout := durationEnv("LLM_TIMEOUT", 5*time.Minute)
 	turnTimeout := durationEnv("TURN_TIMEOUT", 8*time.Minute)
+	// адрес MCP-сервера погоды. Пусто -- инструментов у модели нет, и приложение
+	// работает ровно так, как работало до их появления
+	weatherURL := os.Getenv("MCP_WEATHER_URL")
+	// потолок на один поход к серверу инструментов. Много короче вызова модели:
+	// там думают, здесь ходят в чужой HTTP-сервис
+	mcpTimeout := durationEnv("MCP_TIMEOUT", 20*time.Second)
 
 	providers := map[string]llm.Provider{
 		llm.ProviderDeepSeek:   llm.DeepSeek(os.Getenv("DEEPSEEK_API_KEY")),
 		llm.ProviderOpenRouter: llm.OpenRouter(os.Getenv("OPENROUTER_API_KEY"), appURL, "Agent Sprout"),
 	}
 
-	brain := agent.New(llm.New(timeout), providers)
+	var tools agent.ToolBox
+	if weatherURL != "" {
+		tools = weather.New(weatherURL, mcpTimeout)
+		log.Printf("инструменты: MCP-сервер погоды на %s", weatherURL)
+	} else {
+		log.Print("инструменты: MCP-сервер погоды не задан (MCP_WEATHER_URL)")
+	}
+
+	brain := agent.New(llm.New(timeout), providers, tools)
 
 	defaultModel, err := pickDefaultModel(brain, os.Getenv("DEFAULT_MODEL"))
 	if err != nil {
