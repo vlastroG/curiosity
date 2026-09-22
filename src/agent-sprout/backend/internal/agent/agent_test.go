@@ -289,3 +289,39 @@ func TestRunBlocksWhenContextWindowIsFull(t *testing.T) {
 		t.Fatal("при переполненном окне вызова быть не должно")
 	}
 }
+
+// Правки стража -- не предупреждения.
+//
+// Штатный переход машины («чеклист заполнен, впереди сверка») случается на каждой
+// задаче, и плашка под ответом на нём -- шум, а не польза. Место правок -- отдельное
+// поле Overrides и деталь шага «машина состояний», где они и были с самого начала.
+func TestGuardOverridesStayOutOfWarnings(t *testing.T) {
+	fake := &fakeLLM{}
+
+	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
+		Question: "помоги с работами",
+		Config:   testConfig(),
+	})
+	if err != nil {
+		t.Fatalf("ход: %v", err)
+	}
+
+	if len(out.Overrides) == 0 {
+		t.Fatal("тест бессмыслен: страж ничего не поправил")
+	}
+	if len(out.Warnings) != 0 {
+		t.Fatalf("правки стража утекли в предупреждения: %v", out.Warnings)
+	}
+
+	var routing string
+	for _, step := range out.Trace {
+		if step.Name == StepRouting {
+			routing = step.Detail
+		}
+	}
+	for _, override := range out.Overrides {
+		if !strings.Contains(routing, override) {
+			t.Fatalf("правка %q не видна в трейсе: %s", override, routing)
+		}
+	}
+}

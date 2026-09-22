@@ -84,10 +84,8 @@ func TestToolsOfferedToModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ход: %v", err)
 	}
-	// правки стража в предупреждениях бывают и без инструментов -- нас
-	// интересуют только те, что про них
-	if hasWarning(out.Warnings, "инструмент") {
-		t.Fatalf("предупреждение про инструменты на ровном месте: %v", out.Warnings)
+	if len(out.Warnings) != 0 {
+		t.Fatalf("предупреждения на ровном месте: %v", out.Warnings)
 	}
 
 	calls := toolRequests(fake)

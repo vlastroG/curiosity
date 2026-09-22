@@ -204,8 +204,10 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	verdict := Guard(in.Task, in.SolvedTasks, in.Knowledge, claim, newTaskID)
 	out.Decision = verdict.Decision
 	out.Task = verdict.Task
+	// правки стража живут в Overrides и в детали шага «машина состояний»;
+	// в предупреждения они не идут. Штатный переход машины -- не предупреждение,
+	// а «чеклист заполнен, впереди сверка» человек и так читает в самом ответе
 	out.Overrides = verdict.Overrides
-	out.Warnings = append(out.Warnings, verdict.Overrides...)
 	trace.record(StepRouting, stepStart, true, routingDetail(claim, verdict)+downgradeNote(routerResp.Downgraded))
 
 	// 3. Управление контекстом: если окно истории заполнилось, оно закрывается.

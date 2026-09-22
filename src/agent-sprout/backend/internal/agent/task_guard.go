@@ -177,7 +177,7 @@ func applyPhase(task *Task, change Change, verdict *Verdict) {
 // forcedNote объясняет в предупреждениях, почему машина решила за диспетчера.
 func forcedNote(from TaskPhase, event Decision, task Task, change Change) string {
 	switch {
-	case event == DecisionConfirm && change.Corrected:
+	case from == PhaseConfirming && event == DecisionConfirm && change.Corrected:
 		return "данные поправлены на сверке — показываю список заново, план откладывается"
 	case event == DecisionConfirm:
 		// диспетчер способен пометить пункт собранным, когда пользователь о нём
@@ -234,10 +234,22 @@ func applyAnswers(task *Task, answers []Answer, verdict *Verdict) bool {
 		for i := range task.Requirements {
 			if sameWork(task.Requirements[i].Key, key) {
 				was := strings.TrimSpace(task.Requirements[i].Value)
-				if was != "" && was != value {
+				switch {
+				case was == "":
+					// пункт был пуст: это сбор, а не правка
+					task.Requirements[i].Value = value
+
+				case sameWork(was, value):
+					// то же самое другими буквами. Диспетчер охотно меняет регистр
+					// первой буквы, пересказывая уже собранное, и побайтовое сравнение
+					// засчитывало это правкой: человек отвечал «всё верно», а сверка
+					// начиналась заново. Записанное не трогаем -- иначе снимок памяти
+					// дёргается там, где ничего не менялось
+
+				default:
 					corrected = true
+					task.Requirements[i].Value = value
 				}
-				task.Requirements[i].Value = value
 				found = true
 				break
 			}
