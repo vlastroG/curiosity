@@ -1,0 +1,553 @@
+/*
+ * Тёмная тема биржевого терминала: плоские панели, волосяные границы.
+ * Цвет несёт смысл и только его: зелёный -- рост, красный -- падение,
+ * серый -- боковик, янтарь -- действие и внимание.
+ */
+
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
+:root {
+  --bg: #0f1113;
+  --panel: #16191c;
+  --panel-2: #1d2125;
+  --border: #272c31;
+  --border-bright: #3a4148;
+  --text: #e3e6e8;
+  --muted: #8b939a;
+  --accent: #e0a83a;
+  --up: #3fb57a;
+  --up-dim: rgba(63, 181, 122, 0.16);
+  --down: #e0554a;
+  --down-dim: rgba(224, 85, 74, 0.16);
+  --flat: #8b939a;
+  --flat-dim: rgba(139, 147, 154, 0.16);
+
+  --font: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --mono: 'IBM Plex Mono', Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 16px 16px 40px;
+}
+
+/* шапка */
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.brand-mark {
+  color: var(--accent);
+}
+
+.brand-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.field select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border-bright);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+  min-width: 96px;
+}
+
+.field-wide select {
+  min-width: 210px;
+}
+
+.field select:focus {
+  outline: 1px solid var(--accent);
+}
+
+.btn {
+  background: var(--accent);
+  color: #15120a;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* статус и баннеры */
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 28px;
+  padding: 10px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.status b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.bad {
+  color: var(--down);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.pulse {
+  color: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.banner {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.banner-error {
+  background: var(--down-dim);
+  border: 1px solid var(--down);
+}
+
+.banner-warn {
+  background: rgba(224, 168, 58, 0.12);
+  border: 1px solid var(--accent);
+}
+
+section {
+  margin-top: 22px;
+}
+
+h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.h-note {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.empty {
+  padding: 18px;
+  background: var(--panel);
+  border: 1px dashed var(--border-bright);
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+/* карточки монет */
+.coins {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.coin {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.coin-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.coin-symbol {
+  font-family: var(--mono);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.coin-price {
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.coin-change {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.up {
+  color: var(--up);
+}
+.down {
+  color: var(--down);
+}
+.flat {
+  color: var(--flat);
+}
+
+.spark {
+  display: block;
+  width: 100%;
+  height: 56px;
+  margin: 8px 0 6px;
+}
+
+.spark-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+}
+
+.spark-area {
+  fill: currentColor;
+  opacity: 0.1;
+}
+
+.spark-dot {
+  fill: currentColor;
+}
+
+.spark-empty {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.coin-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.coin-stats div {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.coin-stats dt {
+  color: var(--muted);
+}
+
+.coin-stats dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.badge.up {
+  background: var(--up-dim);
+}
+.badge.down {
+  background: var(--down-dim);
+}
+.badge.flat {
+  background: var(--flat-dim);
+}
+
+/* прогноз */
+.forecast {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+}
+
+.overview {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.forecast-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+}
+
+.frow {
+  background: var(--panel-2);
+  border-radius: 5px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.frow-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.frow-head .conf {
+  margin-left: auto;
+}
+
+.range {
+  position: relative;
+  height: 14px;
+  margin: 10px 0 6px;
+  background: var(--bg);
+  border-radius: 3px;
+}
+
+.range-band {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 2px;
+}
+
+.range-band.up {
+  background: var(--up);
+}
+.range-band.down {
+  background: var(--down);
+}
+.range-band.flat {
+  background: var(--flat);
+}
+
+.range-now {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+}
+
+.frow-nums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.frow-nums b {
+  color: var(--text);
+  font-family: var(--mono);
+  font-weight: 400;
+}
+
+.reason {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.conf {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-family: var(--mono);
+  color: var(--muted);
+}
+
+.conf-bar {
+  width: 48px;
+  height: 5px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.conf-bar span {
+  display: block;
+  height: 100%;
+}
+
+.conf.high .conf-bar span {
+  background: var(--up);
+}
+.conf.mid .conf-bar span {
+  background: var(--accent);
+}
+.conf.low .conf-bar span {
+  background: var(--down);
+}
+
+.trace {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.trace code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 4px;
+}
+
+/* история */
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hist {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.hist summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.hist-time {
+  font-family: var(--mono);
+}
+
+.hist-model {
+  color: var(--muted);
+}
+
+.hist-coins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.hist-body {
+  padding: 0 12px 10px;
+  font-size: 13px;
+}
+
+.hist-body p {
+  margin: 0 0 6px;
+}
+
+.hist-body ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.hist-body b {
+  color: var(--text);
+  font-family: var(--mono);
+  font-weight: 500;
+}
+
+.foot {
+  margin-top: 28px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .brand-sub {
+    display: none;
+  }
+  .controls,
+  .field,
+  .field select,
+  .btn {
+    width: 100%;
+  }
+  .forecast-rows {
+    grid-template-columns: 1fr;
+  }
+}
