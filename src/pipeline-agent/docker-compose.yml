@@ -10,8 +10,9 @@ services:
     env_file:
       - ../../.env
     volumes:
-      # артефакты цепочки, HTML-конспекты, логи агента
-      - pipeline-data:/data
+      # папка data рядом с этим файлом: out/ -- HTML-конспекты, logs/ -- логи агента,
+      # artifacts/ -- промежуточные результаты цепочки
+      - ./data:/data
     # опубликован, чтобы звать инструменты напрямую curl'ом или из другого MCP-клиента
     ports:
       - "8765:8080"
@@ -31,12 +32,9 @@ services:
     environment:
       MCP_URL: http://mcp-pipeline:8080/mcp
     volumes:
-      - pipeline-data:/data
+      - ./data:/data
     stdin_open: true
     tty: true
     depends_on:
       mcp-pipeline:
         condition: service_healthy
-
-volumes:
-  pipeline-data:

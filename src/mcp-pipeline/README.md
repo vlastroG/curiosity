@@ -56,7 +56,7 @@ cd ../pipeline-agent && docker compose up -d --build mcp-pipeline
 
 ```bash
 docker build -t mcp-pipeline .
-docker run -d -p 8765:8080 --env-file ../../.env -v pipeline-data:/data mcp-pipeline
+docker run -d -p 8765:8080 --env-file ../../.env -v "$PWD/data:/data" mcp-pipeline
 ```
 
 Транспорт — Streamable HTTP без сессий, ответ приходит обычным JSON:

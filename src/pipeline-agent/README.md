@@ -46,7 +46,7 @@
  │  save_to_file{"sum_f379…"} ─────────────────────►│ save_to_file                       │
  │  ◄── out/rust-web-….html ───────────────────────  │   └► out/rust-web-….html, index.html
  │                                 │                └────────────────────────────────────┘
- │ проверка цепочки:               │                 том pipeline-data:/data
+ │ проверка цепочки:               │                 папка ./data (в контейнере /data)
  │  hn_search → summarize → save,  │                 ├─ artifacts/  промежуточные результаты
  │  id и sha256 совпадают,         │                 ├─ out/        HTML-конспекты
  │  файл есть на сервере → ✔       │                 └─ logs/       логи агента
@@ -163,21 +163,25 @@ docker compose run --rm -e PIPELINE_MODEL=google/gemma-4-31b-it:free agent "…"
 
 ## Результаты
 
-Всё хранится на томе `pipeline-data`:
+Всё лежит в папке `data` рядом с `docker-compose.yml`, то есть в `src/pipeline-agent/data`.
+Внутри контейнеров она смонтирована как `/data`. В git папка не попадает.
 
 | Путь | Что там |
 |---|---|
-| `/data/out/<тема>-<дата>.html` | конспекты |
-| `/data/out/index.html` | список всех конспектов со ссылками |
-| `/data/out/index.json` | опись: запрос, модель, id и хеши звеньев цепочки |
-| `/data/logs/agent-<время>.log` | лог каждого запуска агента |
-| `/data/artifacts/*.json` | промежуточные результаты: выдачи и конспекты |
+| `data/out/<тема>-<дата>.html` | конспекты |
+| `data/out/index.html` | список всех конспектов со ссылками |
+| `data/out/index.json` | опись: запрос, модель, id и хеши звеньев цепочки |
+| `data/logs/agent-<время>.log` | лог каждого запуска агента |
+| `data/artifacts/*.json` | промежуточные результаты: выдачи и конспекты |
 
-Забрать на хост:
+Папка создаётся при первом запуске. Чтобы начать с чистого листа, остановите сервер
+и удалите её.
+
+На Linux контейнеры пишут в папку от пользователя с uid 10001. Если сервер пишет в лог
+`permission denied`, выдайте права один раз:
 
 ```bash
-docker compose cp mcp-pipeline:/data/out ./out
-docker compose cp mcp-pipeline:/data/logs ./logs
+mkdir -p data && sudo chown -R 10001 data
 ```
 
 HTML-файлы самодостаточные: стили встроены, скриптов и внешних ресурсов нет. Страница
@@ -190,7 +194,7 @@ HTML-файлы самодостаточные: стили встроены, с�
 
 ```bash
 docker compose logs -f mcp-pipeline   # сервер
-ls logs/                              # агент, после docker compose cp
+ls data/logs/                         # агент
 ```
 
 Агент:
