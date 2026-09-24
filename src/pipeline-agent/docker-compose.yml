@@ -1,0 +1,42 @@
+# mcp-pipeline -- MCP-сервер, работает постоянно.
+# agent        -- CLI, запускается на один запрос или сессию: docker compose run --rm agent "…"
+#
+# Модель -- PIPELINE_MODEL в общем .env в корне репозитория; оба контейнера читают
+# её при старте. Не задана -- бесплатная nvidia/nemotron-3-super-120b-a12b:free.
+services:
+  mcp-pipeline:
+    build: ../mcp-pipeline
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    volumes:
+      # артефакты цепочки, HTML-конспекты, логи агента
+      - pipeline-data:/data
+    # опубликован, чтобы звать инструменты напрямую curl'ом или из другого MCP-клиента
+    ports:
+      - "8765:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+  agent:
+    build: .
+    # не стартует от docker compose up: только docker compose run
+    profiles: ["cli"]
+    env_file:
+      - ../../.env
+    environment:
+      MCP_URL: http://mcp-pipeline:8080/mcp
+    volumes:
+      - pipeline-data:/data
+    stdin_open: true
+    tty: true
+    depends_on:
+      mcp-pipeline:
+        condition: service_healthy
+
+volumes:
+  pipeline-data:
