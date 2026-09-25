@@ -1,0 +1,41 @@
+# Два контейнера, оба работают 24/7 и поднимаются сами после сбоя или перезагрузки.
+#
+#   mcp-crypto   -- MCP-сервер с планировщиком: каждые N минут снимает цены в SQLite
+#   crypto-watch -- агент + веб-интерфейс: каждые N минут просит модель сделать прогноз
+services:
+  crypto-watch:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "5175:8080"
+    env_file:
+      - ../../.env
+    environment:
+      APP_URL: http://localhost:5175
+      MCP_CRYPTO_URL: http://mcp-crypto:8080/mcp
+    volumes:
+      # настройки (частота, окно, модель) переживают пересборку
+      - watch-data:/data
+    depends_on:
+      mcp-crypto:
+        condition: service_healthy
+
+  mcp-crypto:
+    build: ../mcp-crypto
+    restart: unless-stopped
+    # опубликован, чтобы потрогать MCP curl'ом: http://localhost:8766/mcp
+    ports:
+      - "8766:8080"
+    volumes:
+      # история цен и прогнозов
+      - crypto-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+
+volumes:
+  crypto-data:
+  watch-data:
