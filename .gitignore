@@ -149,3 +149,5 @@ vite.config.ts.timestamp-*
 *.db
 *.db-shm
 *.db-wal
+# данные HN Digest Agent: конспекты, логи, артефакты
+src/pipeline-agent/data/

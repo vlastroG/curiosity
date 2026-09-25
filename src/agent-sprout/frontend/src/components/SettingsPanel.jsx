@@ -58,6 +58,14 @@ export function SettingsPanel({ chat, catalog, saving, error, onSave, onClose })
           <span className="field__hint">{modelHint(catalog, draft.model)}</span>
         </label>
 
+        <Toggle
+          label="погода по MCP"
+          hint={weatherHint(catalog, draft.model)}
+          checked={Boolean(draft.weather) && toolsCapable(catalog, draft.model)}
+          disabled={!toolsCapable(catalog, draft.model)}
+          onChange={(weather) => set({ weather })}
+        />
+
         <Slider
           label="temperature"
           hint="разброс ответов: 0 — предсказуемо, 2 — свободно"
@@ -130,7 +138,42 @@ function editable(draft) {
     temperature: draft.temperature,
     maxTokens: draft.maxTokens,
     maxInputChars: draft.maxInputChars,
+    weather: draft.weather,
   };
+}
+
+// toolsCapable -- умеет ли выбранная модель вызывать инструменты.
+//
+// Флаг приходит из каталога, с сервера: решать это в интерфейсе значило бы
+// держать список моделей в двух местах.
+function toolsCapable(catalog, id) {
+  return Boolean(catalog.models.find((item) => item.id === id)?.tools);
+}
+
+function weatherHint(catalog, id) {
+  if (!toolsCapable(catalog, id)) {
+    return 'выбранная модель не умеет вызывать инструменты';
+  }
+  return 'агент сам узнаёт погоду в месте работ и учитывает её в плане. Город — в профиле';
+}
+
+// Toggle -- выключатель. Отдельным компонентом ради той же разметки полей,
+// что у ползунка и числовых настроек.
+function Toggle({ label, hint, checked, disabled, onChange }) {
+  return (
+    <label className={`field${disabled ? ' field--disabled' : ''}`}>
+      <span className="field__label">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.checked)}
+        />{' '}
+        {label}
+      </span>
+      <span className="field__hint">{hint}</span>
+    </label>
+  );
 }
 
 function modelOf(catalog, id) {

@@ -563,3 +563,138 @@ func TestGuardFillingAnEmptyItemIsNotACorrection(t *testing.T) {
 			verdict.Decision, verdict.Task.Phase)
 	}
 }
+
+// Пересказ собранного другими буквами -- не правка.
+//
+// Ради этого теста всё и чинилось: диспетчер, разбирая «всё верно», охотно повторяет
+// уже собранные значения, меняя регистр первой буквы. Побайтовое сравнение засчитывало
+// это правкой, сверка начиналась заново, и план приходилось подтверждать дважды.
+func TestGuardRetellingIsNotACorrection(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"другой регистр первой буквы", "Значение"},
+		{"верхний регистр целиком", "ЗНАЧЕНИЕ"},
+		{"лишние пробелы по краям", "  значение  "},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			verdict := Guard(confirming(3), nil, nil, Routing{
+				Decision: DecisionCollect,
+				Answers:  []Answer{{Key: "а-пункт", Value: tc.value}},
+			}, fixedID())
+
+			if verdict.Decision != DecisionPlan || !verdict.Closing {
+				t.Fatalf("пересказ того же значения обязан закрывать задачу планом, получено %q",
+					verdict.Decision)
+			}
+			// записанное не трогаем: иначе снимок памяти дёргается там, где ничего не менялось
+			if verdict.Task.Requirements[0].Value != "значение" {
+				t.Fatalf("значение переписано пересказом: %q", verdict.Task.Requirements[0].Value)
+			}
+		})
+	}
+}
+
+// Обратная сторона: содержательное расхождение по-прежнему откладывает план,
+// даже если отличие невелико.
+func TestGuardRealCorrectionStillPostponesThePlan(t *testing.T) {
+	verdict := Guard(confirming(3), nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers:  []Answer{{Key: "а-пункт", Value: "значение другое"}},
+	}, fixedID())
+
+	if verdict.Decision != DecisionConfirm || verdict.Closing {
+		t.Fatalf("правка обязана откладывать план, получено %q", verdict.Decision)
+	}
+	if verdict.Task.Requirements[0].Value != "значение другое" {
+		t.Fatalf("правка не применилась: %q", verdict.Task.Requirements[0].Value)
+	}
+}
+
+// Правка на ходе, которым задача только входит на сверку, ничего не откладывает:
+// это обычный путь, и говорить про отложенный план здесь неправда.
+func TestGuardEnteringReviewNeverClaimsPostponement(t *testing.T) {
+	task := collecting(checklist(3))
+	for i := range task.Requirements {
+		task.Requirements[i].Value = "значение"
+	}
+
+	verdict := Guard(task, nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers:  []Answer{{Key: "а-пункт", Value: "значение другое"}},
+	}, fixedID())
+
+	if verdict.Decision != DecisionConfirm || verdict.Task.Phase != PhaseConfirming {
+		t.Fatalf("полный чеклист ведёт на сверку, получено %q → %q",
+			verdict.Decision, verdict.Task.Phase)
+	}
+	for _, note := range verdict.Overrides {
+		if strings.Contains(note, "откладывается") {
+			t.Fatalf("вход на сверку выдан за отложенный план: %q", note)
+		}
+	}
+	if !hasNote(verdict.Overrides, "перед планом обязательна сверка") {
+		t.Fatalf("не названа причина перехода: %v", verdict.Overrides)
+	}
+}
+
+func hasNote(notes []string, substring string) bool {
+	for _, note := range notes {
+		if strings.Contains(note, substring) {
+			return true
+		}
+	}
+	return false
+}
+
+// Тот самый разговор, на котором приёмка плана сломалась.
+//
+// Чеклист и ответы диспетчера взяты из хранилища как есть: человек написал
+// «всё верно», а диспетчер повторил четыре собранных значения со строчной буквы
+// вместо прописной. Побайтовое сравнение засчитывало это правкой, и сверка
+// начиналась заново -- «всё верно» приходилось писать дважды.
+func TestGuardRealConfirmationFromTheBrokenChat(t *testing.T) {
+	task := &Task{
+		ID:           "task-1",
+		Title:        "отмостка вокруг дома",
+		Phase:        PhaseConfirming,
+		CollectTurns: 4,
+		Requirements: []Requirement{
+			{Key: "основание", Question: "вопрос?", Value: "старая отмостка под демонтаж, под ней предположительно трамбованный песок"},
+			{Key: "размеры", Question: "вопрос?", Value: "толщина 200 мм, ширина от стены 1 м, длина по периметру 100 м"},
+			{Key: "уклон", Question: "вопрос?", Value: "5%"},
+			{Key: "тип конструкции", Question: "вопрос?", Value: "жёсткая (бетон)"},
+			{Key: "пирог", Question: "вопрос?", Value: "щебень и бетон"},
+			{Key: "материалы", Question: "вопрос?", Value: "армирование минимальное, нужна подсказка по сетке"},
+			{Key: "инструмент", Question: "вопрос?", Value: "Самосвал для вывоза демонтируемой отмостки, миксер заедет, подъезд есть"},
+			{Key: "погода", Question: "вопрос?", Value: "Москва, нужен прогноз на дни работ"},
+			{Key: "сроки", Question: "вопрос?", Value: "При сильном дожде готов отложить на следующую неделю"},
+			{Key: "опыт", Question: "вопрос?", Value: "Есть опыт, работает руками не первый год (из профиля)"},
+			{Key: "примыкание", Question: "вопрос?", Value: "герметик со шнуром Вилатерм"},
+			{Key: "дренаж", Question: "вопрос?", Value: "Нужна ливнёвка по краю: лоток до ливневой канализации"},
+		},
+	}
+
+	verdict := Guard(task, nil, nil, Routing{
+		Decision: DecisionCollect,
+		Answers: []Answer{
+			{Key: "инструмент", Value: "самосвал для вывоза демонтируемой отмостки, миксер заедет, подъезд есть"},
+			{Key: "сроки", Value: "при сильном дожде готов отложить на следующую неделю"},
+			{Key: "опыт", Value: "есть опыт, работает руками не первый год (из профиля)"},
+			{Key: "дренаж", Value: "нужна ливнёвка по краю: лоток до ливневой канализации"},
+		},
+	}, fixedID())
+
+	if verdict.Decision != DecisionPlan || !verdict.Closing {
+		t.Fatalf("«всё верно» обязано закрывать задачу с первого раза, получено %q", verdict.Decision)
+	}
+	if verdict.Task.Phase != PhaseDone {
+		t.Fatalf("фаза должна стать done, получено %q", verdict.Task.Phase)
+	}
+	if hasNote(verdict.Overrides, "откладывается") {
+		t.Fatalf("план отложен на пустом месте: %v", verdict.Overrides)
+	}
+}

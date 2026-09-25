@@ -225,7 +225,8 @@ type configPatch struct {
 	MaxTokens   *int     `json:"maxTokens"`
 	// historyDepth здесь нет намеренно: окно истории -- предохранитель, а не настройка,
 	// см. комментарий у agent.Config.HistoryDepth
-	MaxInputChars *int `json:"maxInputChars"`
+	MaxInputChars *int  `json:"maxInputChars"`
+	Weather       *bool `json:"weather"`
 }
 
 func (p configPatch) apply(cfg agent.Config) agent.Config {
@@ -240,6 +241,9 @@ func (p configPatch) apply(cfg agent.Config) agent.Config {
 	}
 	if p.MaxInputChars != nil {
 		cfg.MaxInputChars = *p.MaxInputChars
+	}
+	if p.Weather != nil {
+		cfg.Weather = *p.Weather
 	}
 	return cfg
 }

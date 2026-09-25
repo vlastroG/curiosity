@@ -74,13 +74,23 @@ func (f *fakeLLM) answerCalls() []llm.Request {
 	return calls
 }
 
+// timeFixture -- момент, на который считается стоимость во всех тестах:
+// будний день, пиковый тариф.
+func timeFixture() time.Time { return time.Date(2026, 9, 7, 2, 0, 0, 0, time.UTC) }
+
 func newTestAgent(fake *fakeLLM) *Agent {
+	return newToolAgent(fake, nil)
+}
+
+// newToolAgent -- агент с набором инструментов. Отдельный конструктор, чтобы
+// десятки тестов, которым инструменты не нужны, не перечисляли nil.
+func newToolAgent(fake *fakeLLM, tools ToolBox) *Agent {
 	brain := New(fake, map[string]llm.Provider{
 		llm.ProviderDeepSeek: llm.DeepSeek("test-key"),
-	})
+	}, tools)
 	// фиксированное время: расчёт стоимости не должен зависеть от того,
 	// когда запускаются тесты
-	brain.now = func() time.Time { return time.Date(2026, 9, 7, 2, 0, 0, 0, time.UTC) }
+	brain.now = timeFixture
 	return brain
 }
 
@@ -210,7 +220,7 @@ func TestRunWithoutHistoryDepthSendsOnlyQuestion(t *testing.T) {
 func TestRunUnavailableModel(t *testing.T) {
 	fake := &fakeLLM{}
 	// провайдер OpenRouter не передан вовсе
-	brain := New(fake, map[string]llm.Provider{llm.ProviderDeepSeek: llm.DeepSeek("test-key")})
+	brain := New(fake, map[string]llm.Provider{llm.ProviderDeepSeek: llm.DeepSeek("test-key")}, nil)
 
 	// конфиг берём целиком от этой модели: с чужим бюджетом вывода запрос упёрся бы
 	// в окно контекста раньше, чем дошёл до провайдера
@@ -277,5 +287,41 @@ func TestRunBlocksWhenContextWindowIsFull(t *testing.T) {
 	}
 	if len(fake.calls) != 0 {
 		t.Fatal("при переполненном окне вызова быть не должно")
+	}
+}
+
+// Правки стража -- не предупреждения.
+//
+// Штатный переход машины («чеклист заполнен, впереди сверка») случается на каждой
+// задаче, и плашка под ответом на нём -- шум, а не польза. Место правок -- отдельное
+// поле Overrides и деталь шага «машина состояний», где они и были с самого начала.
+func TestGuardOverridesStayOutOfWarnings(t *testing.T) {
+	fake := &fakeLLM{}
+
+	out, err := newTestAgent(fake).Run(context.Background(), RunInput{
+		Question: "помоги с работами",
+		Config:   testConfig(),
+	})
+	if err != nil {
+		t.Fatalf("ход: %v", err)
+	}
+
+	if len(out.Overrides) == 0 {
+		t.Fatal("тест бессмыслен: страж ничего не поправил")
+	}
+	if len(out.Warnings) != 0 {
+		t.Fatalf("правки стража утекли в предупреждения: %v", out.Warnings)
+	}
+
+	var routing string
+	for _, step := range out.Trace {
+		if step.Name == StepRouting {
+			routing = step.Detail
+		}
+	}
+	for _, override := range out.Overrides {
+		if !strings.Contains(routing, override) {
+			t.Fatalf("правка %q не видна в трейсе: %s", override, routing)
+		}
 	}
 }

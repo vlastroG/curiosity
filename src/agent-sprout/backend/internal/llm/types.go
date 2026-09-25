@@ -6,9 +6,17 @@
 package llm
 
 // Message -- одно сообщение в диалоге в терминах API провайдера.
+//
+// Два последних поля появляются только в разговоре с инструментами: ответ модели
+// с заявкой на вызов несёт ToolCalls, результат вызова -- ToolCallID. Оба уезжают
+// в следующий запрос как есть, поэтому форма полей повторяет форму провайдера.
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ToolCalls -- чего модель хочет от инструментов. Только у роли assistant
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolCallID -- на какую заявку отвечает это сообщение. Только у роли tool
+	ToolCallID string `json:"tool_call_id,omitempty"`
 }
 
 // Роли сообщений в запросе к модели.
@@ -16,7 +24,45 @@ const (
 	RoleSystem    = "system"
 	RoleUser      = "user"
 	RoleAssistant = "assistant"
+	// RoleTool -- результат вызова инструмента, который модель заказала прошлым ходом
+	RoleTool = "tool"
 )
+
+// Tool -- инструмент, который модель вправе вызвать.
+//
+// Ни имени, ни описания, ни схемы здесь не придумывают: всё это приходит от
+// MCP-сервера, а пакет только перекладывает их в форму провайдера. Читает их
+// тоже не человек, а модель -- по ним она решает, звать инструмент или обойтись.
+type Tool struct {
+	Name        string
+	Description string
+	// Parameters -- json-схема аргументов, как её отдал сервер инструмента
+	Parameters map[string]any
+}
+
+// ToolCall -- заявка модели на вызов инструмента.
+//
+// Структура повторяет тело провайдера дословно, потому что уезжает обратно
+// в следующий запрос нетронутой: переписывать то, что мы всё равно вернём
+// как есть, значит наживать расхождение на пустом месте.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction -- что именно вызвать и с чем.
+type ToolFunction struct {
+	Name string `json:"name"`
+	// Arguments -- json-строка, а не разобранный объект: так её присылает провайдер,
+	// и так она уезжает исполнителю. Модель вправе прислать сюда невалидный json --
+	// разбирать его дело того, кто исполняет вызов
+	Arguments string `json:"arguments"`
+}
+
+// Значение ToolChoice. Другие режимы (принудительный вызов, запрет) пока не нужны:
+// решение звать или не звать -- ровно то, ради чего инструменты и отдаются модели.
+const ToolChoiceAuto = "auto"
 
 // Request -- параметры одного вызова модели. Поля повторяют тело OpenAI-совместимого
 // запроса, но собираются из настроек чата в internal/agent.
@@ -32,6 +78,13 @@ type Request struct {
 	// не отправляется, и решает провайдер (у DeepSeek по умолчанию рассуждение
 	// включено с максимальным усилием)
 	Thinking string
+	// Tools -- инструменты, доступные модели на этом вызове. Пусто -- ни поле tools,
+	// ни tool_choice в тело не попадают: провайдер, который их не знает, считает
+	// лишний ключ ошибкой
+	Tools []Tool
+	// ToolChoice -- насколько модель свободна в решении звать инструмент.
+	// Пусто при непустых Tools означает ToolChoiceAuto
+	ToolChoice string
 }
 
 // Schema -- json-схема ответа.
@@ -77,8 +130,11 @@ func (u Usage) ReasoningTokens() int {
 type Response struct {
 	Text         string
 	FinishReason string
-	Usage        Usage
-	LatencyMs    int
+	// ToolCalls -- модель просит вызвать инструменты и ждёт результатов.
+	// Непустое поле означает, что ход не закончен: текста ответа ещё нет
+	ToolCalls []ToolCall
+	Usage     Usage
+	LatencyMs int
 	// Downgraded -- провайдер не принял ускоряющие параметры, и запрос прошёл
 	// со второй попытки без них. Видно в трейсе
 	Downgraded bool
@@ -95,6 +151,23 @@ type wireRequest struct {
 	// thinking принимают не все провайдеры -- отсюда откат в client.go
 	Thinking       *wireThinking `json:"thinking,omitempty"`
 	ResponseFormat *wireRespFmt  `json:"response_format,omitempty"`
+	// tools тоже принимают не все: у маленьких моделей вызова инструментов
+	// просто нет, и лишний ключ они считают ошибкой
+	Tools      []wireTool `json:"tools,omitempty"`
+	ToolChoice string     `json:"tool_choice,omitempty"`
+}
+
+// wireTool -- инструмент в форме OpenAI: вложенность на ровном месте, но формат
+// чужой, и спорить с ним негде.
+type wireTool struct {
+	Type     string           `json:"type"`
+	Function wireToolFunction `json:"function"`
+}
+
+type wireToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 type wireThinking struct {
@@ -117,7 +190,8 @@ type wireJSONSchema struct {
 type wireResponse struct {
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
