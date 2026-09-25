@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -119,6 +120,32 @@ func newServer(client *http.Client) *mcp.Server {
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: renderForecast(out)}},
+		}, out, nil
+	})
+
+	return server
+}
+
+// newTravelServer -- исходный набор инструментов плюс trip_weather.
+//
+// Отдельный сервер, а не ещё один инструмент в newServer: у /mcp набор
+// инструментов не меняется (см. newMux).
+func newTravelServer(client *http.Client, now func() time.Time) *mcp.Server {
+	server := newServer(client)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "trip_weather",
+		Description: "Погода по дням на даты поездки для точки по координатам. " +
+			"Если поездка целиком в ближайшие 16 дней -- прогноз; если дальше -- климатическая норма " +
+			"по тем же дням за 5 прошлых лет (это не прогноз, в ответе так и сказано). " +
+			"Координаты бери у сервиса мест, не придумывай. Поездка -- не длиннее 16 дней.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in TripWeatherInput) (*mcp.CallToolResult, TripWeatherOutput, error) {
+		out, err := tripWeather(ctx, client, in, now())
+		if err != nil {
+			return nil, TripWeatherOutput{}, err
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: renderTripWeather(out)}},
 		}, out, nil
 	})
 
