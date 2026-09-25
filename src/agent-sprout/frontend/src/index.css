@@ -675,6 +675,10 @@ code,
   align-items: flex-start;
   gap: 8px;
 }
+/* недоступная настройка: видно, что она есть, и видно, что сейчас её не тронуть */
+.field--disabled {
+  opacity: 0.45;
+}
 .field__label {
   color: var(--accent-dim);
   font-size: 11px;

@@ -20,6 +20,7 @@ const (
 	StepOutputPolicy = "output policy"
 	StepRouting      = "машина состояний"
 	StepTaskSummary  = "закрытие задачи"
+	StepTool         = "инструмент (MCP)"
 	StepJudge        = "судья"
 )
 

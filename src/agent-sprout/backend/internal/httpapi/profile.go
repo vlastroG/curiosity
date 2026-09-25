@@ -24,6 +24,7 @@ const (
 
 type profileRequest struct {
 	About  string `json:"about"`
+	City   string `json:"city"`
 	Style  string `json:"style"`
 	Format string `json:"format"`
 	Limits string `json:"limits"`
@@ -47,6 +48,7 @@ func (d Deps) handleSaveProfile(w http.ResponseWriter, r *http.Request) {
 
 	profile := store.Profile{
 		About:  strings.TrimSpace(body.About),
+		City:   strings.TrimSpace(body.City),
 		Style:  strings.TrimSpace(body.Style),
 		Format: strings.TrimSpace(body.Format),
 		Limits: strings.TrimSpace(body.Limits),
@@ -71,6 +73,7 @@ func (d Deps) handleSaveProfile(w http.ResponseWriter, r *http.Request) {
 func validProfile(p store.Profile) error {
 	fields := map[string]string{
 		"«о себе»":      p.About,
+		"«город»":       p.City,
 		"«стиль»":       p.Style,
 		"«формат»":      p.Format,
 		"«ограничения»": p.Limits,

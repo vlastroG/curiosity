@@ -1,4 +1,4 @@
-module agent-sprout
+module mcp-weather
 
 go 1.25.0
 

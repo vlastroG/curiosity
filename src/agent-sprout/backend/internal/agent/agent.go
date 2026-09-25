@@ -31,14 +31,18 @@ type Completer interface {
 type Agent struct {
 	llm       Completer
 	providers map[string]llm.Provider
+	// tools -- внешние инструменты, доступные модели. nil означает, что сервер
+	// инструментов не настроен: ход идёт как раньше, одним вызовом модели
+	tools ToolBox
 	// now вынесено полем, чтобы тесты могли зафиксировать время и проверить
 	// переключение тарифа peak/off-peak
 	now func() time.Time
 }
 
-// New собирает агента поверх клиента моделей и набора провайдеров.
-func New(completer Completer, providers map[string]llm.Provider) *Agent {
-	return &Agent{llm: completer, providers: providers, now: time.Now}
+// New собирает агента поверх клиента моделей, набора провайдеров и набора
+// внешних инструментов. Инструментов может не быть -- тогда tools равен nil.
+func New(completer Completer, providers map[string]llm.Provider, tools ToolBox) *Agent {
+	return &Agent{llm: completer, providers: providers, tools: tools, now: time.Now}
 }
 
 // Message -- сообщение истории чата в том виде, в каком его отдаёт хранилище.
@@ -101,6 +105,13 @@ type RunOutput struct {
 	Routing *ServiceCall `json:"routing,omitempty"`
 	// TaskSummary -- метрики вызова, закрывшего задачу пересказом
 	TaskSummary *ServiceCall `json:"taskSummary,omitempty"`
+	// ToolRounds -- метрики вызовов модели, закончившихся заявкой на инструмент.
+	//
+	// Отдельно от Usage намеренно. Usage должен остаться числами последнего вызова:
+	// по ним считается заполненность окна контекста, а контекст у всех кругов один
+	// и тот же -- сложив их, индикатор показал бы вдвое больше занятого. В деньги
+	// круги при этом входят полностью, через TotalUSD: заплачено за каждый
+	ToolRounds []ServiceCall `json:"toolRounds,omitempty"`
 }
 
 // ServiceCall -- метрики служебного вызова модели (диспетчер, пересказ задачи).
@@ -193,8 +204,10 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	verdict := Guard(in.Task, in.SolvedTasks, in.Knowledge, claim, newTaskID)
 	out.Decision = verdict.Decision
 	out.Task = verdict.Task
+	// правки стража живут в Overrides и в детали шага «машина состояний»;
+	// в предупреждения они не идут. Штатный переход машины -- не предупреждение,
+	// а «чеклист заполнен, впереди сверка» человек и так читает в самом ответе
 	out.Overrides = verdict.Overrides
-	out.Warnings = append(out.Warnings, verdict.Overrides...)
 	trace.record(StepRouting, stepStart, true, routingDetail(claim, verdict)+downgradeNote(routerResp.Downgraded))
 
 	// 3. Управление контекстом: если окно истории заполнилось, оно закрывается.
@@ -226,29 +239,68 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		summaryNote(summary), profileNote(in.Profile)))
 
 	// 5. Вызов модели.
-	stepStart = time.Now()
-	// рассуждение здесь не ограничивается: детальный план работ -- ровно то место,
-	// где думать есть над чем
-	resp, err := a.llm.Chat(ctx, provider, llm.Request{
-		Model:       model.ID,
-		Messages:    messages,
-		Temperature: in.Config.Temperature,
-		MaxTokens:   in.Config.MaxTokens,
-	})
-	if err != nil {
-		trace.record(StepLLM, stepStart, false, err.Error())
-		out.Trace = trace.steps
-		return out, err
+	//
+	// Прямой вызов превращается в цикл, когда модели даны инструменты: она просит
+	// вызов, агент исполняет его и спрашивает снова -- и так, пока не придёт ответ
+	// человеку. Без инструментов круг ровно один, как и было.
+	tools, toolsErr := a.toolDefinitions(ctx, model, in.Config)
+	if toolsErr != nil {
+		// недоступный сервер инструментов ход не отменяет: без погоды агент
+		// работает ровно так, как работал до её появления
+		out.Warnings = append(out.Warnings, "инструменты недоступны: "+toolsErr.Error())
 	}
-	out.Calls++
-	out.Usage = resp.Usage
-	out.FinishReason = resp.FinishReason
-	out.Cost = model.Cost(resp.Usage, a.now())
-	out.TotalUSD += out.Cost.USD
-	trace.record(StepLLM, stepStart, true,
-		fmt.Sprintf("%d -> %d токенов, finish_reason=%s%s",
-			resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.FinishReason,
-			downgradeNote(resp.Downgraded)))
+
+	var resp llm.Response
+	for rounds := 0; ; {
+		stepStart = time.Now()
+		// рассуждение здесь не ограничивается: детальный план работ -- ровно то место,
+		// где думать есть над чем
+		resp, err = a.llm.Chat(ctx, provider, llm.Request{
+			Model:       model.ID,
+			Messages:    messages,
+			Temperature: in.Config.Temperature,
+			MaxTokens:   in.Config.MaxTokens,
+			Tools:       tools,
+		})
+		if err != nil {
+			trace.record(StepLLM, stepStart, false, err.Error())
+			out.Trace = trace.steps
+			return out, err
+		}
+
+		out.Calls++
+		cost := model.Cost(resp.Usage, a.now())
+		out.TotalUSD += cost.USD
+		trace.record(StepLLM, stepStart, true, llmDetail(resp))
+
+		// заявок нет -- модель ответила человеку, ход закончен. Условие про tools
+		// страхует от провайдера, приславшего заявку на инструменты, которых мы
+		// не давали: без него цикл стал бы бесконечным
+		if len(resp.ToolCalls) == 0 || tools == nil {
+			out.Usage = resp.Usage
+			out.FinishReason = resp.FinishReason
+			out.Cost = cost
+			break
+		}
+
+		out.ToolRounds = append(out.ToolRounds, ServiceCall{
+			Usage: resp.Usage, Cost: cost, LatencyMs: resp.LatencyMs,
+		})
+
+		// заявка модели и результаты вызовов уезжают в следующий запрос:
+		// без них она не увидит, что вернули инструменты
+		messages = append(messages, llm.Message{Role: llm.RoleAssistant, ToolCalls: resp.ToolCalls})
+		messages = append(messages, a.callTools(ctx, trace, resp.ToolCalls)...)
+
+		if rounds++; rounds >= maxToolRounds {
+			// дальше идём без инструментов: иначе ход рискует закончиться очередной
+			// заявкой и пустым текстом, который отклонит выходная политика
+			tools = nil
+			out.Warnings = append(out.Warnings, fmt.Sprintf(
+				"модель ходила к инструментам %d %s подряд — последний ответ собран без них",
+				rounds, Plural(rounds, "раз", "раза", "раз")))
+		}
+	}
 
 	// 6. Выходная политика.
 	stepStart = time.Now()
@@ -260,7 +312,10 @@ func (a *Agent) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		return out, err
 	}
 	out.Answer = resp.Text
-	out.Warnings = warnings
+	// именно append: к этому моменту в предупреждениях уже лежат правки стража
+	// и всё, что случилось с инструментами. Присваивание стирало их молча,
+	// а показывает лента только warnings
+	out.Warnings = append(out.Warnings, warnings...)
 	trace.record(StepOutputPolicy, stepStart, true, outputDetail(warnings))
 
 	// 7. Закрытие задачи пересказом. Сбой не отменяет ход: план уже выдан и оплачен,
@@ -410,6 +465,20 @@ func summaryNote(summary string) string {
 		return ", плюс пересказ свёрнутой части"
 	}
 	return ""
+}
+
+// llmDetail -- строка трейса про один вызов модели.
+//
+// Заявка на инструменты названа явно: иначе круг с пустым текстом выглядел бы
+// в ленте как вызов, который зачем-то ничего не вернул.
+func llmDetail(resp llm.Response) string {
+	detail := fmt.Sprintf("%d -> %d токенов, finish_reason=%s",
+		resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.FinishReason)
+	if n := len(resp.ToolCalls); n > 0 {
+		detail += fmt.Sprintf(", %d %s к инструментам",
+			n, Plural(n, "заявка", "заявки", "заявок"))
+	}
+	return detail + downgradeNote(resp.Downgraded)
 }
 
 func outputDetail(warnings []string) string {
