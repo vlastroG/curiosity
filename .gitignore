@@ -151,3 +151,6 @@ vite.config.ts.timestamp-*
 *.db-wal
 # данные HN Digest Agent: конспекты, логи, артефакты
 src/pipeline-agent/data/
+
+# данные Trip Planner: история, планы, HTML
+src/trip-agent/data/

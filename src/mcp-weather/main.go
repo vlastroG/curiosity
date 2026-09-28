@@ -52,19 +52,7 @@ func run() error {
 	// инструмент, который думает минуту, хуже инструмента, который честно сдался
 	apiTimeout := durationEnv("API_TIMEOUT", 15*time.Second)
 
-	server := newServer(&http.Client{Timeout: apiTimeout})
-
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
-	))
-	// health отдельно от протокола: docker-compose должен уметь спросить
-	// «ты живой?», не зная ничего про MCP
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
-	})
+	mux := newMux(&http.Client{Timeout: apiTimeout}, time.Now)
 
 	httpServer := &http.Server{
 		Addr:              ":" + port,
@@ -77,7 +65,7 @@ func run() error {
 
 	errc := make(chan error, 1)
 	go func() {
-		log.Printf("слушаю :%s, MCP на /mcp, таймаут запроса к Open-Meteo %s", port, apiTimeout)
+		log.Printf("слушаю :%s, MCP на /mcp и /mcp/travel, таймаут запроса к Open-Meteo %s", port, apiTimeout)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}
@@ -93,6 +81,35 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return httpServer.Shutdown(shutdownCtx)
+}
+
+// newMux -- маршруты сервера.
+//
+// Два адреса MCP. /mcp -- исходный набор find_place и get_forecast: на него
+// завязаны существующие клиенты (помощник строителя отдаёт модели весь список
+// инструментов), и он не меняется. /mcp/travel -- тот же набор плюс trip_weather
+// для планирования поездок. Новый инструмент живёт только там, чтобы у старых
+// клиентов не поменялся ни список инструментов, ни поведение модели.
+func newMux(client *http.Client, now func() time.Time) *http.ServeMux {
+	server := newServer(client)
+	travel := newTravelServer(client, now)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
+	))
+	mux.Handle("/mcp/travel", mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return travel },
+		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true},
+	))
+	// health отдельно от протокола: docker-compose должен уметь спросить
+	// «ты живой?», не зная ничего про MCP
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+	return mux
 }
 
 func env(name, fallback string) string {

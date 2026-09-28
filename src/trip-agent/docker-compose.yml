@@ -1,0 +1,57 @@
+# Trip Planner: веб-интерфейс с агентом и четыре MCP-сервера.
+#
+#   trip-agent   -- интерфейс, очередь, агент-оркестратор          http://localhost:5179
+#   mcp-places   -- город, достопримечательности (Open-Meteo, Википедия)
+#   mcp-weather  -- погода на даты поездки (/mcp/travel), тот же сервер, что у помощника строителя
+#   mcp-money    -- валюта страны, курсы ЦБ РФ, бюджет
+#   mcp-trip     -- сборка и публикация плана
+#
+# Модель -- TRIP_MODEL в общем .env в корне репозитория. Данные -- в ./data рядом:
+# data/runs -- история, data/trips -- планы, data/out -- HTML.
+x-healthcheck: &healthcheck
+  test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+  interval: 5s
+  timeout: 3s
+  retries: 5
+  start_period: 3s
+
+services:
+  trip-agent:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "5179:8080"
+    env_file:
+      - ../../.env
+    environment:
+      APP_URL: http://localhost:5179
+      TRIP_SERVERS: places=http://mcp-places:8080/mcp,weather=http://mcp-weather:8080/mcp/travel,money=http://mcp-money:8080/mcp,trip=http://mcp-trip:8080/mcp
+    volumes:
+      - ./data:/data
+    depends_on:
+      mcp-places: { condition: service_healthy }
+      mcp-weather: { condition: service_healthy }
+      mcp-money: { condition: service_healthy }
+      mcp-trip: { condition: service_healthy }
+
+  mcp-places:
+    build: ../mcp-places
+    restart: unless-stopped
+    healthcheck: *healthcheck
+
+  mcp-weather:
+    build: ../mcp-weather
+    restart: unless-stopped
+    healthcheck: *healthcheck
+
+  mcp-money:
+    build: ../mcp-money
+    restart: unless-stopped
+    healthcheck: *healthcheck
+
+  mcp-trip:
+    build: ../mcp-trip
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    healthcheck: *healthcheck
