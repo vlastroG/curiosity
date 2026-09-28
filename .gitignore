@@ -154,3 +154,6 @@ src/pipeline-agent/data/
 
 # данные Trip Planner: история, планы, HTML
 src/trip-agent/data/
+
+# данные Doc Index: индекс SQLite и скачанные книги
+src/doc-index/data/
