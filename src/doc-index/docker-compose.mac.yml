@@ -1,0 +1,11 @@
+# macOS (Apple Silicon): Docker на Mac не пробрасывает видеокарту в контейнеры,
+# поэтому Ollama ставится как приложение (https://ollama.com/download) и считает
+# на Metal. Контейнер ollama не поднимается, doc-index ходит к Ollama на хосте:
+#   docker compose -f docker-compose.yml -f docker-compose.mac.yml up -d
+services:
+  doc-index:
+    environment:
+      OLLAMA_URL: http://host.docker.internal:11434
+    depends_on: !reset {}
+  ollama:
+    profiles: [disabled]

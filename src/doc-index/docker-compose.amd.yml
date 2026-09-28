@@ -1,0 +1,9 @@
+# Видеокарта AMD (Linux, ROCm):
+#   docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    deploy: !reset {}
+    devices:
+      - /dev/kfd
+      - /dev/dri
