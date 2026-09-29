@@ -1,0 +1,732 @@
+// Package httpapi -- REST API интерфейса и раздача собранного фронтенда.
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"doc-index/internal/book"
+	"doc-index/internal/chunk"
+	"doc-index/internal/compare"
+	"doc-index/internal/embed"
+	"doc-index/internal/experiment"
+	"doc-index/internal/index"
+	"doc-index/internal/rag"
+	"doc-index/internal/search"
+	"doc-index/internal/store"
+)
+
+// Ollama -- то, что API нужно от Ollama.
+type Ollama interface {
+	Version(ctx context.Context) (string, error)
+	Where(ctx context.Context, model string) (embed.Placement, error)
+	RequireGPU(ctx context.Context, model string) (embed.Placement, error)
+}
+
+// Config -- зависимости API.
+type Config struct {
+	Store     *store.Store
+	Searcher  *search.Searcher
+	Ollama    Ollama
+	OllamaURL string
+	Jobs      *index.Jobs
+	// Index запускает индексацию; вызывается внутри Jobs.
+	Index     func(ctx context.Context, rebuild bool, emit func(index.Event)) error
+	EvalPath  string
+	Params    chunk.Params
+	StaticDir string
+
+	// RAG
+	Agent          *rag.Agent
+	LLMError       error       // модель ответов недоступна (нет ключа и т. п.)
+	EvalJobs       *index.Jobs // прогон контрольных вопросов
+	ControlsPath   string
+	RagEvalPath    string
+	ExperimentPath string
+}
+
+// API -- обработчики.
+type API struct {
+	Config
+
+	gpuMu sync.Mutex
+	gpuOK map[string]bool
+
+	cmpMu  sync.Mutex
+	cmpKey string
+	cmp    *compare.Report
+}
+
+// New собирает маршрутизатор: API под /api, остальное -- интерфейс.
+func New(cfg Config) http.Handler {
+	a := &API{Config: cfg, gpuOK: map[string]bool{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/status", a.status)
+	mux.HandleFunc("POST /api/search", a.search)
+	mux.HandleFunc("GET /api/questions", a.questions)
+	mux.HandleFunc("GET /api/books/{book}", a.book)
+	mux.HandleFunc("GET /api/books/{book}/sections/{n}", a.section)
+	mux.HandleFunc("GET /api/books/{book}/sections/{n}/chunks", a.sectionChunks)
+	mux.HandleFunc("GET /api/chunks/{variant}/{id}", a.chunk)
+	mux.HandleFunc("GET /api/compare", a.compare)
+	mux.HandleFunc("POST /api/index", a.startIndex)
+	mux.HandleFunc("GET /api/index/events", a.indexEvents)
+	mux.HandleFunc("POST /api/ask", a.ask)
+	mux.HandleFunc("GET /api/controls", a.controls)
+	mux.HandleFunc("GET /api/rag-eval", a.ragEval)
+	mux.HandleFunc("POST /api/rag-eval", a.startRagEval)
+	mux.HandleFunc("GET /api/rag-eval/events", a.ragEvalEvents)
+	mux.HandleFunc("GET /api/experiment", a.experiment)
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	mux.Handle("/", spa(cfg.StaticDir))
+	return securityHeaders(mux)
+}
+
+type bookJSON struct {
+	ID        string `json:"id"`
+	Gutenberg int    `json:"gutenberg"`
+	Title     string `json:"title"`
+	TitleRu   string `json:"titleRu"`
+	Author    string `json:"author"`
+	URL       string `json:"url"`
+	Sections  int    `json:"sections"`
+	Chars     int    `json:"chars"`
+}
+
+func bookInfo(b *book.Book) bookJSON {
+	return bookJSON{ID: b.ID, Gutenberg: b.Gutenberg, Title: b.Title, TitleRu: b.TitleRu, Author: b.Author,
+		URL: b.URL(), Sections: len(b.Sections), Chars: b.Rune(len(b.Text))}
+}
+
+type variantJSON struct {
+	index.Variant
+	Ready  bool          `json:"ready"`
+	Chunks int           `json:"chunks"`
+	Tokens int           `json:"tokens"`
+	Dims   int           `json:"dims"`
+	Books  []store.State `json:"books"`
+}
+
+// status -- всё для шапки и вкладки «Индекс» за один запрос.
+func (a *API) status(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if err := a.Searcher.Refresh(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := map[string]any{"params": a.Params, "job": a.Jobs.State()}
+
+	ol := map[string]any{"url": a.OllamaURL}
+	if ver, err := a.Ollama.Version(ctx); err != nil {
+		ol["error"] = err.Error()
+	} else {
+		ol["version"] = ver
+		gpu := map[string]embed.Placement{}
+		for _, v := range a.Searcher.Variants {
+			if p, err := a.Ollama.Where(ctx, v.Model); err == nil {
+				gpu[v.Model] = p
+			}
+		}
+		ol["models"] = gpu
+	}
+	out["ollama"] = ol
+
+	var books []bookJSON
+	for _, info := range sortedBooks(a.Searcher.Books()) {
+		books = append(books, bookInfo(info.Book))
+	}
+	out["books"] = books
+
+	states, err := a.Store.States(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	var vs []variantJSON
+	for _, v := range a.Searcher.Variants {
+		vj := variantJSON{Variant: v, Books: []store.State{}}
+		for _, st := range states {
+			if st.Variant == v.ID {
+				vj.Books = append(vj.Books, st)
+				vj.Chunks += st.Chunks
+				vj.Tokens += st.Tokens
+				vj.Dims = st.Dims
+			}
+		}
+		vj.Ready = len(vj.Books) > 0 && len(vj.Books) == len(books)
+		vs = append(vs, vj)
+	}
+	out["variants"] = vs
+
+	ragInfo := map[string]any{}
+	if a.Agent != nil {
+		ragInfo["model"] = a.Agent.LLM.Model
+		ragInfo["retrieval"] = a.Agent.Config
+		ragInfo["topK"] = a.Agent.K
+	}
+	if a.LLMError != nil {
+		ragInfo["error"] = a.LLMError.Error()
+	}
+	if a.EvalJobs != nil {
+		ragInfo["evalJob"] = a.EvalJobs.State()
+	}
+	out["rag"] = ragInfo
+
+	// пример чанка с метаданными -- для вкладки «Индекс»
+	for _, v := range a.Searcher.Variants {
+		if v.Strategy == index.Structure {
+			if cs := a.Searcher.Chunks(v.ID); len(cs) > 12 {
+				c := cs[12]
+				c.Text = shorten(c.Text, 400)
+				out["sample"] = map[string]any{"variant": v.ID, "chunk": c, "vectorHead": head(c.Vector, 8),
+					"vectorDims": len(c.Vector)}
+			}
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type searchRequest struct {
+	Query    string   `json:"query"`
+	Variants []string `json:"variants"`
+	Book     string   `json:"book"`
+	K        int      `json:"k"`
+}
+
+func (a *API) search(w http.ResponseWriter, r *http.Request) {
+	var req searchRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("неверный запрос"))
+		return
+	}
+	req.Query = strings.TrimSpace(req.Query)
+	switch {
+	case req.Query == "":
+		writeError(w, http.StatusBadRequest, errors.New("введите вопрос"))
+		return
+	case len([]rune(req.Query)) > 500:
+		writeError(w, http.StatusBadRequest, errors.New("вопрос длиннее 500 символов"))
+		return
+	case len(req.Variants) == 0 || len(req.Variants) > 4:
+		writeError(w, http.StatusBadRequest, errors.New("выберите от одного до четырёх вариантов"))
+		return
+	}
+	if req.K <= 0 || req.K > 10 {
+		req.K = 5
+	}
+	resp, err := a.Searcher.Search(r.Context(), req.Query, req.Variants, req.Book, req.K)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, search.ErrEmptyIndex) {
+			status = http.StatusConflict
+		} else if strings.Contains(err.Error(), "неизвестный вариант") {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err)
+		return
+	}
+	// только GPU: первая же загрузка модели проверяется
+	for model := range resp.EmbedMs {
+		if err := a.requireGPU(r.Context(), model); err != nil {
+			writeError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *API) requireGPU(ctx context.Context, model string) error {
+	a.gpuMu.Lock()
+	ok := a.gpuOK[model]
+	a.gpuMu.Unlock()
+	if ok {
+		return nil
+	}
+	if _, err := a.Ollama.RequireGPU(ctx, model); err != nil {
+		return err
+	}
+	a.gpuMu.Lock()
+	a.gpuOK[model] = true
+	a.gpuMu.Unlock()
+	return nil
+}
+
+func (a *API) loadQuestions() ([]compare.Question, error) {
+	qs, err := compare.Load(a.EvalPath)
+	if err != nil {
+		return nil, err
+	}
+	books := map[string]*book.Book{}
+	for id, info := range a.Searcher.Books() {
+		books[id] = info.Book
+	}
+	return compare.Validate(qs, books), nil
+}
+
+func (a *API) questions(w http.ResponseWriter, r *http.Request) {
+	if err := a.Searcher.Refresh(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	qs, err := a.loadQuestions()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"questions": qs})
+}
+
+type sectionJSON struct {
+	N     int    `json:"n"`
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Title string `json:"title"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+}
+
+func (a *API) bookByID(w http.ResponseWriter, r *http.Request) (*search.BookInfo, bool) {
+	if err := a.Searcher.Refresh(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return nil, false
+	}
+	info := a.Searcher.Books()[r.PathValue("book")]
+	if info == nil {
+		writeError(w, http.StatusNotFound, errors.New("книги нет в индексе"))
+		return nil, false
+	}
+	return info, true
+}
+
+func (a *API) book(w http.ResponseWriter, r *http.Request) {
+	info, ok := a.bookByID(w, r)
+	if !ok {
+		return
+	}
+	b := info.Book
+	secs := make([]sectionJSON, len(b.Sections))
+	for i, s := range b.Sections {
+		secs[i] = sectionJSON{s.N, s.Key, s.Label, s.Title, b.Rune(s.Start), b.Rune(s.End)}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"book": bookInfo(b), "sections": secs})
+}
+
+func (a *API) sectionOf(w http.ResponseWriter, r *http.Request) (*search.BookInfo, book.Section, bool) {
+	info, ok := a.bookByID(w, r)
+	if !ok {
+		return nil, book.Section{}, false
+	}
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil || n < 0 || n >= len(info.Book.Sections) {
+		writeError(w, http.StatusNotFound, errors.New("нет такой главы"))
+		return nil, book.Section{}, false
+	}
+	return info, info.Book.Sections[n], true
+}
+
+type paragraphJSON struct {
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	Text  string `json:"text"`
+}
+
+// section -- текст главы из локальной копии, абзацами, со смещениями
+// в символах от начала книги: по ним интерфейс подсвечивает чанки.
+func (a *API) section(w http.ResponseWriter, r *http.Request) {
+	info, sec, ok := a.sectionOf(w, r)
+	if !ok {
+		return
+	}
+	b := info.Book
+	var paras []paragraphJSON
+	for _, p := range b.Paragraphs {
+		if p.Section == sec.N {
+			paras = append(paras, paragraphJSON{b.Rune(p.Start), b.Rune(p.End), b.Text[p.Start:p.End]})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"book":    bookInfo(b),
+		"section": sectionJSON{sec.N, sec.Key, sec.Label, sec.Title, b.Rune(sec.Start), b.Rune(sec.End)},
+		"heading": b.Text[sec.Start:sec.BodyStart],
+		"paras":   paras,
+		"total":   len(b.Sections),
+	})
+}
+
+// sectionChunks -- чанки варианта, которые задевают главу: для разметки
+// «как вариант нарезал этот текст».
+func (a *API) sectionChunks(w http.ResponseWriter, r *http.Request) {
+	info, sec, ok := a.sectionOf(w, r)
+	if !ok {
+		return
+	}
+	variant := r.URL.Query().Get("variant")
+	var out []search.Hit
+	for _, c := range a.Searcher.Chunks(variant) {
+		if c.Book == info.Book.ID && c.Start < sec.End && sec.Start < c.End {
+			h := search.MakeHit(c, info, c.Ordinal, 0)
+			h.Snippet = ""
+			out = append(out, h)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"chunks": out})
+}
+
+// chunk -- один чанк с метаданными: куда вести ссылку «открыть в книге».
+func (a *API) chunk(w http.ResponseWriter, r *http.Request) {
+	if err := a.Searcher.Refresh(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	variant, id := r.PathValue("variant"), r.PathValue("id")
+	for _, c := range a.Searcher.Chunks(variant) {
+		if c.ChunkID == id {
+			h := search.MakeHit(c, a.Searcher.Books()[c.Book], c.Ordinal, 0)
+			writeJSON(w, http.StatusOK, map[string]any{"chunk": h, "variant": variant})
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, errors.New("чанк не найден — возможно, индекс перестроен"))
+}
+
+// compare -- сравнение вариантов. Пересчитывается, когда поменялся индекс
+// или файл контрольных вопросов.
+func (a *API) compare(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ver, err := a.Store.Meta(ctx, "index_version")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	st, err := os.Stat(a.EvalPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("файл вопросов: %w", err))
+		return
+	}
+	key := ver + "|" + st.ModTime().String()
+
+	a.cmpMu.Lock()
+	defer a.cmpMu.Unlock()
+	if a.cmp != nil && a.cmpKey == key {
+		writeJSON(w, http.StatusOK, a.cmp)
+		return
+	}
+	qs, err := compare.Load(a.EvalPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	rep, err := compare.Build(ctx, a.Searcher, qs, a.Params)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.cmp, a.cmpKey = &rep, key
+	writeJSON(w, http.StatusOK, rep)
+}
+
+func (a *API) startIndex(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Rebuild bool `json:"rebuild"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req)
+	err := a.Jobs.Start(context.WithoutCancel(r.Context()), func(ctx context.Context, emit func(index.Event)) error {
+		return a.Index(ctx, req.Rebuild, func(e index.Event) {
+			log.Printf("[%s] %s", e.Stage, e.Message)
+			emit(e)
+		})
+	})
+	if errors.Is(err, index.ErrBusy) {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, a.Jobs.State())
+}
+
+// indexEvents -- события индексации потоком (SSE). ?since=N -- продолжить
+// с события N после переподключения.
+func (a *API) indexEvents(w http.ResponseWriter, r *http.Request) {
+	streamJob(w, r, a.Jobs)
+}
+
+// streamJob -- события фоновой работы потоком (SSE).
+func streamJob(w http.ResponseWriter, r *http.Request, jobs *index.Jobs) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("поток не поддерживается"))
+		return
+	}
+	since, _ := strconv.Atoi(r.URL.Query().Get("since"))
+	past, ch, cancel := jobs.Subscribe(since)
+	defer cancel()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	send := func(e index.Event) {
+		raw, _ := json.Marshal(e)
+		fmt.Fprintf(w, "id: %d\ndata: %s\n\n", e.Seq, raw)
+	}
+	for _, e := range past {
+		send(e)
+	}
+	flusher.Flush()
+
+	tick := time.NewTicker(15 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case e, ok := <-ch:
+			if !ok {
+				fmt.Fprint(w, "event: end\ndata: {}\n\n")
+				flusher.Flush()
+				return
+			}
+			send(e)
+			flusher.Flush()
+		case <-tick.C:
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// ask -- ответ на вопрос без RAG и с RAG.
+func (a *API) ask(w http.ResponseWriter, r *http.Request) {
+	if a.Agent == nil || a.LLMError != nil {
+		msg := "модель ответов не настроена"
+		if a.LLMError != nil {
+			msg = a.LLMError.Error()
+		}
+		writeError(w, http.StatusServiceUnavailable, errors.New(msg))
+		return
+	}
+	var req struct {
+		Question string `json:"question"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("неверный запрос"))
+		return
+	}
+	q := strings.TrimSpace(req.Question)
+	switch {
+	case q == "":
+		writeError(w, http.StatusBadRequest, errors.New("введите вопрос"))
+		return
+	case len([]rune(q)) > 500:
+		writeError(w, http.StatusBadRequest, errors.New("вопрос длиннее 500 символов"))
+		return
+	}
+	if err := a.Searcher.Refresh(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if len(a.Searcher.Chunks(a.Agent.Config.Variant)) == 0 {
+		writeError(w, http.StatusConflict, search.ErrEmptyIndex)
+		return
+	}
+	res := a.Agent.Ask(r.Context(), q)
+	model := a.Searcher.Variants[0].Model
+	if res.RAG.Error == "" && len(res.RAG.Sources) > 0 {
+		if err := a.requireGPU(r.Context(), model); err != nil {
+			res.RAG.Error = err.Error()
+		}
+	}
+	out := map[string]any{"result": res}
+	if cs, err := a.loadControls(); err == nil {
+		for _, c := range cs {
+			if c.Q == q {
+				out["control"] = c
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *API) loadControls() ([]rag.Control, error) {
+	cs, err := rag.LoadControls(a.ControlsPath)
+	if err != nil {
+		return nil, err
+	}
+	books := map[string]*book.Book{}
+	for id, info := range a.Searcher.Books() {
+		books[id] = info.Book
+	}
+	return rag.ValidateControls(cs, books), nil
+}
+
+func (a *API) controls(w http.ResponseWriter, r *http.Request) {
+	if err := a.Searcher.Refresh(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	cs, err := a.loadControls()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"controls": cs})
+}
+
+func (a *API) ragEval(w http.ResponseWriter, _ *http.Request) {
+	rep, err := rag.LoadReport(a.RagEvalPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"report": rep, "job": a.EvalJobs.State()})
+}
+
+func (a *API) startRagEval(w http.ResponseWriter, r *http.Request) {
+	if a.Agent == nil || a.LLMError != nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("модель ответов не настроена"))
+		return
+	}
+	var req struct {
+		Force bool `json:"force"`
+	}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req)
+	if err := a.Searcher.Refresh(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	controls, err := a.loadControls()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	err = a.EvalJobs.Start(context.WithoutCancel(r.Context()), func(ctx context.Context, emit func(index.Event)) error {
+		total := 0
+		for _, c := range controls {
+			if c.Valid {
+				total++
+			}
+		}
+		done := 0
+		rep, err := a.Agent.Evaluate(ctx, controls, a.RagEvalPath, req.Force, func(_ int, row rag.EvalRow, skipped bool) {
+			done++
+			msg := fmt.Sprintf("%s: без RAG — %s, с RAG — %s", row.Control.Q, verdictRu(row.NoRAG.Verdict), verdictRu(row.RAG.Verdict))
+			if skipped {
+				msg = row.Control.Q + ": уже оценён"
+			} else if row.JudgeError != "" {
+				msg = row.Control.Q + ": " + row.JudgeError
+			}
+			log.Printf("[rag-eval] %s", msg)
+			emit(index.Event{Stage: "eval", Message: msg, Done: done, Total: total})
+		})
+		if err == nil {
+			emit(index.Event{Stage: "done", Message: fmt.Sprintf("готово: с RAG верно %d из %d, без RAG — %d",
+				rep.RAG.Correct, len(rep.Rows), rep.NoRAG.Correct)})
+		}
+		return err
+	})
+	if errors.Is(err, index.ErrBusy) {
+		writeError(w, http.StatusConflict, errors.New("прогон уже идёт"))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, a.EvalJobs.State())
+}
+
+func (a *API) ragEvalEvents(w http.ResponseWriter, r *http.Request) {
+	streamJob(w, r, a.EvalJobs)
+}
+
+func verdictRu(v string) string {
+	switch v {
+	case "correct":
+		return "верно"
+	case "partial":
+		return "частично"
+	case "wrong":
+		return "неверно"
+	}
+	return "—"
+}
+
+func (a *API) experiment(w http.ResponseWriter, _ *http.Request) {
+	rep, ok, err := experiment.Load(a.ExperimentPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"exists": ok, "report": rep})
+}
+
+func sortedBooks(m map[string]*search.BookInfo) []*search.BookInfo {
+	out := make([]*search.BookInfo, 0, len(m))
+	for _, info := range m {
+		out = append(out, info)
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j].Book.Gutenberg < out[j-1].Book.Gutenberg; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+func shorten(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+func head(v []float32, n int) []float32 {
+	if len(v) < n {
+		return v
+	}
+	return v[:n]
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, err error) {
+	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+// securityHeaders -- страница без сторонних скриптов и встраиваний. Текст книг
+// интерфейс выводит только как текст.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "+
+			"font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// spa раздаёт собранный интерфейс; неизвестные пути -- index.html.
+func spa(dir string) http.Handler {
+	files := http.FileServer(http.Dir(dir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := filepath.Join(dir, filepath.Clean("/"+r.URL.Path))
+		if st, err := os.Stat(path); err != nil || st.IsDir() {
+			http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
+}

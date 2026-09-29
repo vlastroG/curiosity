@@ -1,0 +1,54 @@
+# Два контейнера:
+#
+#   doc-index -- Go-сервер: веб-интерфейс, индексация, поиск; индекс и тексты книг в ./data
+#   ollama    -- модели эмбеддингов на видеокарте NVIDIA; веса моделей в томе ollama-models
+#
+# Другая видеокарта или macOS -- см. docker-compose.amd.yml и docker-compose.mac.yml.
+name: doc-index
+
+services:
+  doc-index:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "5180:8080"
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+    volumes:
+      # индекс (SQLite), скачанные книги -- рядом, на диске хоста
+      - ./data:/data
+      # контрольные вопросы: правка файла видна сразу, без пересборки
+      - ./eval:/app/eval:ro
+    depends_on:
+      ollama:
+        condition: service_healthy
+        required: false
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    # порт наружу не публикуется: к модели ходит только doc-index по сети compose
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      # модель эмбеддингов держится в видеопамяти, пока открыт интерфейс
+      OLLAMA_KEEP_ALIVE: 30m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  ollama-models:
