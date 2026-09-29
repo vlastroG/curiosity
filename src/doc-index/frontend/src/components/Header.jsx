@@ -1,9 +1,10 @@
 import { fmtNum, plural, routeHash } from '../format.js';
 
 const TABS = [
+  { view: 'ask', title: 'Спросить' },
   { view: 'search', title: 'Поиск' },
-  { view: 'read', title: 'Книга' },
-  { view: 'compare', title: 'Сравнение' },
+  { view: 'read', title: 'Книги' },
+  { view: 'quality', title: 'Качество' },
   { view: 'index', title: 'Индекс' },
 ];
 
@@ -26,14 +27,16 @@ export default function Header({ route, status, error }) {
   return (
     <header className="header">
       <div className="header-row">
-        <a className="brand" href={routeHash('search')}>
+        <a className="brand" href={routeHash('ask')}>
           <span className="brand-mark" aria-hidden="true">
             ≋
           </span>
           <span>
-            <span className="brand-title">Твен · поиск по смыслу</span>
+            <span className="brand-title">Twain Expert</span>
             <span className="brand-sub">
-              {(status?.books || []).map((b) => b.titleRu).join(' · ') || 'индекс книг Project Gutenberg'}
+              {status?.books?.length
+                ? `${status.books.length} ${plural(status.books.length, 'книга', 'книги', 'книг')} Марка Твена · ответы с RAG и без`
+                : 'книги Марка Твена с Project Gutenberg'}
             </span>
           </span>
         </a>
@@ -42,6 +45,7 @@ export default function Header({ route, status, error }) {
             <span className="pill bad">сервер недоступен</span>
           ) : (
             <>
+              {status?.rag?.model && <span className="pill">{status.rag.model}</span>}
               <span className="pill">{main}</span>
               <span className={`pill ${gpu.tone}`}>{gpu.text}</span>
               <span className={`pill ${ready.length ? '' : 'warn'}`}>

@@ -97,6 +97,13 @@ func (s *Searcher) Refresh(ctx context.Context) error {
 	return nil
 }
 
+// Version -- версия индекса, загруженная в память.
+func (s *Searcher) Version() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.version
+}
+
 // Books -- книги индекса.
 func (s *Searcher) Books() map[string]*BookInfo {
 	s.mu.RLock()
@@ -212,34 +219,53 @@ func (s *Searcher) QueryVector(ctx context.Context, model, query string) ([]floa
 	return res.Vectors[0], dur, nil
 }
 
-// Rank -- top-k чанков варианта по готовому вектору вопроса.
-func (s *Searcher) Rank(variant string, qv []float32, bookID string, k int) ([]Hit, error) {
+// Scored -- чанк варианта (номер в Chunks) и его оценка.
+type Scored struct {
+	I     int
+	Score float64
+}
+
+// Dense -- все чанки варианта по убыванию косинуса к вектору вопроса.
+func (s *Searcher) Dense(variant string, qv []float32, bookID string) ([]Scored, error) {
 	s.mu.RLock()
-	cs, books := s.chunks[variant], s.books
+	cs := s.chunks[variant]
 	s.mu.RUnlock()
 	if len(cs) == 0 {
 		return nil, ErrEmptyIndex
 	}
-	type scored struct {
-		i   int
-		cos float64
-	}
-	all := make([]scored, 0, len(cs))
+	all := make([]Scored, 0, len(cs))
 	for i, c := range cs {
 		if bookID != "" && c.Book != bookID {
 			continue
 		}
-		all = append(all, scored{i, chunk.Dot(qv, c.Vector)})
+		all = append(all, Scored{i, chunk.Dot(qv, c.Vector)})
 	}
-	sort.Slice(all, func(a, b int) bool { return all[a].cos > all[b].cos })
-	if len(all) > k {
-		all = all[:k]
+	sort.SliceStable(all, func(a, b int) bool { return all[a].Score > all[b].Score })
+	return all, nil
+}
+
+// Hits -- карточки для первых k чанков ранжированного списка.
+func (s *Searcher) Hits(variant string, ranked []Scored, k int) []Hit {
+	s.mu.RLock()
+	cs, books := s.chunks[variant], s.books
+	s.mu.RUnlock()
+	if len(ranked) > k {
+		ranked = ranked[:k]
 	}
-	hits := make([]Hit, len(all))
-	for r, x := range all {
-		hits[r] = MakeHit(cs[x.i], books[cs[x.i].Book], r+1, x.cos)
+	hits := make([]Hit, len(ranked))
+	for r, x := range ranked {
+		hits[r] = MakeHit(cs[x.I], books[cs[x.I].Book], r+1, x.Score)
 	}
-	return hits, nil
+	return hits
+}
+
+// Rank -- top-k чанков варианта по готовому вектору вопроса.
+func (s *Searcher) Rank(variant string, qv []float32, bookID string, k int) ([]Hit, error) {
+	ranked, err := s.Dense(variant, qv, bookID)
+	if err != nil {
+		return nil, err
+	}
+	return s.Hits(variant, ranked, k), nil
 }
 
 // MakeHit -- карточка найденного места.

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"doc-index/internal/book"
@@ -150,13 +149,13 @@ func Build(ctx context.Context, s *search.Searcher, qs []Question, p chunk.Param
 			if err != nil {
 				return Report{}, err
 			}
-			pl := place(q, hits)
+			pl := Locate(q, hits)
 			rows[i].Places[v.ID] = pl
 			ranks = append(ranks, pl)
 		}
-		vr.All = scores(valid, ranks, "")
+		vr.All = ScoresOf(valid, ranks, "")
 		for _, lang := range []string{"ru", "en"} {
-			if sc := scores(valid, ranks, lang); sc.N > 0 {
+			if sc := ScoresOf(valid, ranks, lang); sc.N > 0 {
 				vr.ByLang[lang] = sc
 			}
 		}
@@ -167,30 +166,30 @@ func Build(ctx context.Context, s *search.Searcher, qs []Question, p chunk.Param
 	return rep, nil
 }
 
-func place(q Question, hits []search.Hit) Place {
+// Locate -- на каком месте выдачи нашлась нужная глава и из какой книги первое место.
+func Locate(q Question, hits []search.Hit) Place {
 	pl := Place{}
 	if len(hits) > 0 {
 		pl.TopBook = hits[0].Book
-	}
-	want := map[string]bool{}
-	for _, c := range q.Chapters {
-		want[strings.ToUpper(c)] = true
 	}
 	for _, h := range hits {
 		if h.Book != q.Book {
 			continue
 		}
 		for _, sec := range h.Sections {
-			if want[sec.Key] {
-				pl.Rank = h.Rank
-				return pl
+			for _, want := range q.Chapters {
+				if book.SameKey(sec.Key, want) {
+					pl.Rank = h.Rank
+					return pl
+				}
 			}
 		}
 	}
 	return pl
 }
 
-func scores(qs []Question, ranks []Place, lang string) Scores {
+// ScoresOf -- метрики по местам; lang -- только вопросы на этом языке ("" -- все).
+func ScoresOf(qs []Question, ranks []Place, lang string) Scores {
 	var sc Scores
 	for i, q := range qs {
 		if lang != "" && q.Lang != lang {

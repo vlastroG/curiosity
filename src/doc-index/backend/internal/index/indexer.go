@@ -46,6 +46,9 @@ type Indexer struct {
 	Variants []Variant
 	Params   chunk.Params
 	Batch    int
+	// CharsPerToken -- задать коэффициент вместо калибровки. Нужен, чтобы
+	// индексы разных моделей резались одинаково и сравнивались честно.
+	CharsPerToken float64
 }
 
 // Summary -- итог запуска.
@@ -203,6 +206,11 @@ func (r *run) fetchBooks() error {
 // сдвигались бы границы чанков и отпечатки.
 func (r *run) calibrate() error {
 	model := r.ix.Variants[0].Model
+	if cpt := r.ix.CharsPerToken; cpt > 0 {
+		r.est = tokens.Estimator{CharsPerToken: cpt}
+		r.say(Event{Stage: "calibrate", Message: fmt.Sprintf("символов на токен: %.2f (задано)", cpt)})
+		return nil
+	}
 	key := "chars_per_token:" + model
 	saved, err := r.ix.Store.Meta(r.ctx, key)
 	if err != nil {
@@ -289,7 +297,8 @@ func Fingerprint(v Variant, b *book.Book, p chunk.Params, est tokens.Estimator) 
 // variant строит один вариант для одной книги. false -- уже был готов.
 func (r *run) variant(v Variant, b *book.Book) (bool, error) {
 	started := time.Now()
-	fp := Fingerprint(v, b, r.ix.Params, r.est)
+	params := v.ParamsOr(r.ix.Params)
+	fp := Fingerprint(v, b, params, r.est)
 	states, err := r.ix.Store.States(r.ctx)
 	if err != nil {
 		return false, err
@@ -308,16 +317,16 @@ func (r *run) variant(v Variant, b *book.Book) (bool, error) {
 	var cs []chunk.Chunk
 	switch v.Strategy {
 	case Fixed:
-		cs = chunk.Fixed(b, r.est, r.ix.Params)
+		cs = chunk.Fixed(b, r.est, params)
 	case Structure:
-		cs = chunk.Structure(b, r.est, r.ix.Params)
+		cs = chunk.Structure(b, r.est, params)
 	case Semantic:
 		sents := chunk.Sentences(b)
 		vectors, err := r.sentenceVectors(v, b, sents)
 		if err != nil {
 			return false, err
 		}
-		cs = chunk.Semantic(b, r.est, r.ix.Params, sents, vectors)
+		cs = chunk.Semantic(b, r.est, params, sents, vectors)
 	default:
 		return false, fmt.Errorf("неизвестная стратегия %q", v.Strategy)
 	}

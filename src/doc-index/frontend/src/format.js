@@ -4,18 +4,18 @@
 // ---------- маршруты (#/search?q=…, #/read/tom/3?c=…) ----------
 
 export function parseRoute(hash) {
-  const raw = (hash || '').replace(/^#/, '') || '/search';
+  const raw = (hash || '').replace(/^#/, '') || '/ask';
   const [path, qs = ''] = raw.split('?');
   const params = Object.fromEntries(new URLSearchParams(qs));
   const parts = path.split('/').filter(Boolean);
-  const view = parts[0] || 'search';
+  const view = parts[0] || 'ask';
   if (view === 'read') {
     return { view, book: parts[1] || '', section: parts[2] === undefined ? null : Number(parts[2]), params };
   }
-  if (['search', 'compare', 'index'].includes(view)) {
+  if (['ask', 'search', 'quality', 'index'].includes(view)) {
     return { view, params };
   }
-  return { view: 'search', params: {} };
+  return { view: 'ask', params: {} };
 }
 
 export function routeHash(view, params = {}, ...parts) {
@@ -182,4 +182,34 @@ export function pickExamples(questions, n = 8) {
     }
   }
   return out;
+}
+
+// ---------- RAG ----------
+
+// splitCitations режет ответ на текст и ссылки на отрывки: «[1]», «[1, 3]», «[2][4]».
+export function splitCitations(text) {
+  const out = [];
+  const re = /\[(\d+(?:\s*[,;]\s*\d+)*)\]/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text || '')) !== null) {
+    if (m.index > last) out.push({ text: text.slice(last, m.index) });
+    for (const n of m[1].split(/[,;]/)) out.push({ cite: Number(n.trim()) });
+    last = m.index + m[0].length;
+  }
+  if (last < (text || '').length) out.push({ text: text.slice(last) });
+  return out;
+}
+
+export const VERDICT = {
+  correct: { text: 'верно', tone: 'good' },
+  partial: { text: 'частично', tone: 'fair' },
+  wrong: { text: 'неверно', tone: 'bad' },
+};
+
+// queryModeTitle -- как шёл поиск, по-человечески.
+export function queryModeTitle(cfg) {
+  if (!cfg) return '';
+  const q = { raw: 'вопрос как есть', en: 'перевод на английский', hyde: 'HyDE — гипотетический абзац-ответ', fuse: 'вопрос + перевод' }[cfg.query] || cfg.query;
+  return [cfg.parent ? 'small-to-big' : '', q, cfg.hybrid ? '+ BM25' : ''].filter(Boolean).join(' · ');
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"doc-index/internal/book"
+	"doc-index/internal/chunk"
 	"doc-index/internal/embed"
 	"doc-index/internal/store"
 )
@@ -22,6 +23,16 @@ type Variant struct {
 	Hint     string `json:"hint"`
 	Strategy string `json:"strategy"`
 	Model    string `json:"model"`
+	// Params -- свои размеры чанков; nil -- общие параметры индексатора
+	Params *chunk.Params `json:"params,omitempty"`
+}
+
+// ParamsOr -- параметры варианта или общие.
+func (v Variant) ParamsOr(def chunk.Params) chunk.Params {
+	if v.Params != nil {
+		return *v.Params
+	}
+	return def
 }
 
 // Variants -- четыре варианта: два обязательных и два, каждый из которых

@@ -15,7 +15,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -70,23 +72,33 @@ type Paragraph struct {
 // Known -- книги, у которых известны id и русское название. Остальные номера
 // Gutenberg тоже индексируются, с id вида pg1342.
 var Known = map[int]struct{ ID, Title, TitleRu, Author string }{
-	74: {"tom", "The Adventures of Tom Sawyer", "Приключения Тома Сойера", "Mark Twain"},
-	76: {"huck", "Adventures of Huckleberry Finn", "Приключения Гекльберри Финна", "Mark Twain"},
+	74:   {"tom", "The Adventures of Tom Sawyer", "Приключения Тома Сойера", "Mark Twain"},
+	76:   {"huck", "Adventures of Huckleberry Finn", "Приключения Гекльберри Финна", "Mark Twain"},
+	91:   {"tom-abroad", "Tom Sawyer Abroad", "Том Сойер за границей", "Mark Twain"},
+	93:   {"tom-detective", "Tom Sawyer, Detective", "Том Сойер — сыщик", "Mark Twain"},
+	1837: {"prince", "The Prince and the Pauper", "Принц и нищий", "Mark Twain"},
+	86:   {"yankee", "A Connecticut Yankee in King Arthur's Court", "Янки из Коннектикута при дворе короля Артура", "Mark Twain"},
+	102:  {"wilson", "The Tragedy of Pudd'nhead Wilson", "Простофиля Вильсон", "Mark Twain"},
+	245:  {"mississippi", "Life on the Mississippi", "Жизнь на Миссисипи", "Mark Twain"},
+	3177: {"roughing", "Roughing It", "Налегке", "Mark Twain"},
+	3176: {"innocents", "The Innocents Abroad", "Простаки за границей", "Mark Twain"},
+	119:  {"tramp", "A Tramp Abroad", "Пешком по Европе", "Mark Twain"},
+	2895: {"equator", "Following the Equator", "По экватору", "Mark Twain"},
+	3186: {"stranger", "The Mysterious Stranger", "Таинственный незнакомец", "Mark Twain"},
 }
 
 var (
 	startRe = regexp.MustCompile(`(?m)^\*\*\* ?START OF (THE|THIS) PROJECT GUTENBERG EBOOK.*$`)
 	endRe   = regexp.MustCompile(`(?m)^\*\*\* ?END OF (THE|THIS) PROJECT GUTENBERG EBOOK.*$`)
 
-	// заголовок раздела в теле книги -- отдельная строка между пустыми
-	headingRe = regexp.MustCompile(`^(CHAPTER ([IVXLC]+|THE LAST)|PREFACE|CONCLUSION|NOTICE|EXPLANATORY)\.?$`)
-	// строка оглавления: «CHAPTER II. Strong Temptations…» или «CHAPTER II.» + описание ниже
-	tocRe      = regexp.MustCompile(`^CHAPTER ([IVXLC]+|THE LAST)\.?\s*(.*)$`)
-	contentsRe = regexp.MustCompile(`^CONTENTS\.?$`)
-	italicRe   = regexp.MustCompile(`_([^_\n]+)_`)
-	spacesRe   = regexp.MustCompile(`[ \t]+`)
-	authorRe   = regexp.MustCompile(`(?m)^Author: (.+)$`)
-	titleRe    = regexp.MustCompile(`(?m)^Title: (.+)$`)
+	// «CHAPTER XII.», «CHAPTER 20», «Chapter 1», «CHAPTER I. TOM SEEKS NEW ADVENTURES»
+	chapterRe = regexp.MustCompile(`^(CHAPTER|Chapter) ([IVXLC]+|\d+|THE LAST|the Last)\b\.?(.*)$`)
+	// предисловие и прочее -- отдельной строкой между пустыми
+	specialRe = regexp.MustCompile(`^(PREFACE|CONCLUSION|NOTICE|EXPLANATORY)\.?$`)
+	italicRe  = regexp.MustCompile(`_([^_\n]+)_`)
+	spacesRe  = regexp.MustCompile(`[ \t]+`)
+	authorRe  = regexp.MustCompile(`(?m)^Author: (.+)$`)
+	titleRe   = regexp.MustCompile(`(?m)^Title: (.+)$`)
 )
 
 // Parse очищает файл Gutenberg и размечает книгу.
@@ -112,35 +124,40 @@ func Parse(gutenberg int, raw []byte) (*Book, error) {
 	}
 
 	lines := strings.Split(text, "\n")
-	toc := parseContents(lines)
-
-	// тело книги начинается с первого заголовка; всё выше -- титул,
-	// оглавление, иллюстрации
-	var heads []int
-	for i := range lines {
-		if isHeading(lines, i) {
-			heads = append(heads, i)
-		}
-	}
+	heads, tocTitles := bodyHeadings(lines)
 	if len(heads) == 0 {
 		return nil, fmt.Errorf("книга %d: не найдено ни одного заголовка главы", gutenberg)
 	}
 
+	// тело книги начинается с первого заголовка; всё выше -- титул,
+	// оглавление, иллюстрации
 	var sb strings.Builder
-	for h, start := range heads {
+	for h, c := range heads {
 		end := len(lines)
 		if h+1 < len(heads) {
-			end = heads[h+1]
+			end = heads[h+1].line
 		}
-		key, label := headingKey(strings.TrimSpace(lines[start]))
+		paras := paragraphs(lines[c.line+1+c.extra : end])
+		title := tocTitles[c.id]
+		if title == "" {
+			title = c.desc
+		}
+		// название отдельным абзацем: забираем, если другого нет или оно набрано
+		// капсом (тогда это точно не текст главы)
+		if len(paras) > 1 && looksLikeTitle(paras[0]) && (title == "" || paras[0] == strings.ToUpper(paras[0])) {
+			if title == "" {
+				title = paras[0]
+			}
+			paras = paras[1:]
+		}
 		if sb.Len() > 0 {
 			sb.WriteString("\n\n")
 		}
-		sec := Section{N: len(b.Sections), Key: key, Label: label, Title: toc[key], Start: sb.Len()}
-		sb.WriteString(strings.ToUpper(label))
+		sec := Section{N: len(b.Sections), Key: c.key, Label: c.label, Title: tidyTitle(title), Start: sb.Len()}
+		sb.WriteString(strings.ToUpper(c.label))
 		sec.BodyStart = -1
 
-		for _, para := range paragraphs(lines[start+1 : end]) {
+		for _, para := range paras {
 			sb.WriteString("\n\n")
 			p := Paragraph{Start: sb.Len(), Section: sec.N}
 			sb.WriteString(para)
@@ -218,89 +235,211 @@ func (b *Book) SectionsIn(start, end int) []int {
 	return out
 }
 
-// FindSection -- раздел по ключу («II», «the last»).
+// FindSection -- раздел по ключу («II», «2», «the last»). Римские и арабские
+// номера равны: в одной книге оглавление бывает римским, а тело -- арабским.
 func (b *Book) FindSection(key string) (Section, bool) {
-	key = strings.ToUpper(strings.TrimSpace(key))
 	for _, s := range b.Sections {
-		if s.Key == key {
+		if SameKey(s.Key, key) {
 			return s, true
 		}
 	}
 	return Section{}, false
 }
 
-func isHeading(lines []string, i int) bool {
-	line := strings.TrimSpace(lines[i])
-	if !headingRe.MatchString(line) {
+// SameKey -- один и тот же раздел: «II» и «2», «the last» и «THE LAST».
+func SameKey(a, b string) bool {
+	a, b = strings.ToUpper(strings.TrimSpace(a)), strings.ToUpper(strings.TrimSpace(b))
+	if a == b {
+		return true
+	}
+	na, nb := chapterNum(a), chapterNum(b)
+	return na > 0 && na == nb
+}
+
+// heading -- строка, похожая на заголовок главы.
+type heading struct {
+	line    int
+	id      string // «C12» для главы 12, «PREFACE» для предисловия
+	key     string // как в тексте: «XII», «12», «THE LAST»
+	label   string // «Chapter XII»
+	desc    string // название в той же строке и строках сразу под ней
+	extra   int    // сколько строк под заголовком ушло в название
+	chapter bool   // глава, а не предисловие и т. п.
+}
+
+// bodyHeadings находит заголовки тела книги и названия глав из оглавления.
+//
+// Оглавление у Gutenberg записано теми же «CHAPTER I. …», что и тело, и стоит
+// то в начале, то в конце, а в двухтомниках -- посередине. Поэтому сначала
+// собираются все строки-кандидаты. Строка оглавления узнаётся по тому, что
+// сразу за ней (и за её названием) идёт следующая строка оглавления, а не
+// текст. Если глава с одним номером встретилась несколько раз, заголовком
+// считается последнее вхождение с текстом: оглавление обычно впереди.
+// Из строк оглавления берутся названия глав.
+func bodyHeadings(lines []string) ([]heading, map[string]string) {
+	var all []heading
+	for i := range lines {
+		afterHeading := len(all) > 0 && all[len(all)-1].line+all[len(all)-1].extra == i-1
+		if h, ok := headingAt(lines, i, afterHeading); ok {
+			all = append(all, h)
+		}
+	}
+	gaps := make([]int, len(all))
+	maxGap := 0
+	for k, h := range all {
+		end := len(lines)
+		if k+1 < len(all) {
+			end = all[k+1].line
+		}
+		for _, l := range lines[min(h.line+1+h.extra, end):end] {
+			gaps[k] += len(strings.TrimSpace(l))
+		}
+		maxGap = max(maxGap, gaps[k])
+	}
+	// порог текста под заголовком: 400 символов, для совсем коротких книг меньше
+	threshold := min(400, maxGap/4)
+	passes := func(k int) bool {
+		if !all[k].chapter {
+			return gaps[k] > 0 // предисловие бывает в одну фразу
+		}
+		return gaps[k] > 0 && gaps[k] >= threshold
+	}
+	// строка оглавления, за которой случайно оказался текст (список иллюстраций
+	// после последней главы оглавления): предыдущий кандидат был без текста,
+	// а у той же главы есть другое вхождение с текстом
+	tocLike := func(k int) bool {
+		if k == 0 || gaps[k-1] >= threshold {
+			return false
+		}
+		for j, x := range all {
+			if j != k && x.id == all[k].id && passes(j) {
+				return true
+			}
+		}
 		return false
 	}
-	// в оглавлении «CHAPTER I.» стоит прямо над описанием -- это не заголовок
-	blankBefore := i == 0 || strings.TrimSpace(lines[i-1]) == ""
-	blankAfter := i+1 >= len(lines) || strings.TrimSpace(lines[i+1]) == ""
-	return blankBefore && blankAfter
-}
-
-func headingKey(line string) (key, label string) {
-	line = strings.TrimSuffix(line, ".")
-	if rest, ok := strings.CutPrefix(line, "CHAPTER "); ok {
-		if rest == "THE LAST" {
-			return rest, "Chapter the Last"
-		}
-		return rest, "Chapter " + rest
-	}
-	return line, strings.ToUpper(line[:1]) + strings.ToLower(line[1:])
-}
-
-// parseContents вытаскивает описания глав из оглавления.
-func parseContents(lines []string) map[string]string {
-	out := map[string]string{}
-	begin := -1
-	for i, l := range lines {
-		if contentsRe.MatchString(strings.TrimSpace(l)) {
-			begin = i + 1
-			break
+	chosen := map[string]int{}
+	for k, h := range all {
+		if passes(k) && !tocLike(k) {
+			chosen[h.id] = k // последнее вхождение с текстом
 		}
 	}
-	if begin < 0 {
-		return out
-	}
-	var key string
-	var desc []string
-	flush := func() {
-		if key != "" {
-			d := strings.Join(desc, " ")
-			d = strings.ReplaceAll(d, " —", "—")
-			out[key] = strings.TrimSpace(spacesRe.ReplaceAllString(d, " "))
-		}
-		key, desc = "", nil
-	}
-	for i := begin; i < len(lines); i++ {
-		l := strings.TrimSpace(lines[i])
-		if isHeading(lines, i) {
-			break // началось тело книги
-		}
-		if m := tocRe.FindStringSubmatch(l); m != nil {
-			flush()
-			key = m[1]
-			if m[2] != "" {
-				desc = append(desc, m[2])
-			}
+	titles := map[string]string{}
+	var body []heading
+	for k, h := range all {
+		if c, ok := chosen[h.id]; ok && c == k {
+			body = append(body, h)
 			continue
 		}
-		if l == "" {
-			if key != "" && len(desc) > 0 {
-				flush()
-			}
-			continue
-		}
-		if key != "" {
-			desc = append(desc, l)
-		} else if len(out) > 0 {
-			break // оглавление кончилось: дальше иллюстрации
+		if h.desc != "" && titles[h.id] == "" {
+			titles[h.id] = h.desc
 		}
 	}
-	flush()
-	return out
+	return body, titles
+}
+
+// headingAt -- строка i как заголовок. Над заголовком -- пустая строка
+// (или другой заголовок: сплошное оглавление без пустых строк).
+func headingAt(lines []string, i int, afterHeading bool) (heading, bool) {
+	line := strings.TrimSpace(lines[i])
+	blankBefore := i == 0 || strings.TrimSpace(lines[i-1]) == "" || afterHeading
+	if !blankBefore {
+		return heading{}, false
+	}
+	if m := chapterRe.FindStringSubmatch(line); m != nil {
+		key := strings.ToUpper(m[2])
+		h := heading{line: i, key: key, label: "Chapter " + key, chapter: true}
+		if key == "THE LAST" {
+			h.label = "Chapter the Last"
+			h.id = "LAST"
+		} else {
+			h.id = fmt.Sprintf("C%d", chapterNum(key))
+		}
+		var desc []string
+		if rest := strings.TrimSpace(strings.TrimLeft(m[3], ".")); rest != "" {
+			desc = append(desc, rest)
+		}
+		// название может продолжаться строками сразу под заголовком
+		for j := i + 1; j < len(lines) && j <= i+6; j++ {
+			next := strings.TrimSpace(lines[j])
+			if next == "" || chapterRe.MatchString(next) {
+				break
+			}
+			desc = append(desc, next)
+			h.extra++
+		}
+		h.desc = strings.Join(desc, " ")
+		if len([]rune(h.desc)) > 400 { // это уже текст, а не название
+			h.desc, h.extra = "", 0
+		}
+		return h, true
+	}
+	if specialRe.MatchString(line) {
+		blankAfter := i+1 >= len(lines) || strings.TrimSpace(lines[i+1]) == ""
+		if !blankAfter {
+			return heading{}, false
+		}
+		word := strings.TrimSuffix(line, ".")
+		return heading{line: i, id: word, key: word, label: word[:1] + strings.ToLower(word[1:])}, true
+	}
+	return heading{}, false
+}
+
+// chapterNum -- номер главы из «XII» или «12»; «THE LAST» -- после всех.
+func chapterNum(key string) int {
+	if key == "THE LAST" {
+		return 100000
+	}
+	if n, err := strconv.Atoi(key); err == nil {
+		return n
+	}
+	vals := map[byte]int{'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100}
+	n, prev := 0, 0
+	for i := len(key) - 1; i >= 0; i-- {
+		v, ok := vals[key[i]]
+		if !ok {
+			return 0
+		}
+		if v < prev {
+			n -= v
+		} else {
+			n += v
+			prev = v
+		}
+	}
+	return n
+}
+
+// looksLikeTitle -- короткий первый абзац без точки в конце: название главы,
+// набранное отдельной строкой («KING ARTHUR'S COURT», «A Catastrophe»).
+func looksLikeTitle(p string) bool {
+	r := []rune(p)
+	if len(r) == 0 || len(r) > 60 {
+		return false
+	}
+	return !strings.ContainsRune(".!?,;:”\"’)—", r[len(r)-1]) && !strings.ContainsRune("“\"‘(", r[0])
+}
+
+// tidyTitle -- название без лишних пробелов; КАПСЛОК -- в обычный вид.
+func tidyTitle(t string) string {
+	t = strings.TrimSpace(spacesRe.ReplaceAllString(t, " "))
+	t = strings.ReplaceAll(t, "--", "—")
+	t = strings.ReplaceAll(t, " —", "—")
+	if t != strings.ToUpper(t) {
+		return t
+	}
+	words := strings.Fields(strings.ToLower(t))
+	for i, w := range words {
+		r := []rune(w)
+		for j, c := range r {
+			if unicode.IsLetter(c) {
+				r[j] = unicode.ToUpper(c)
+				break
+			}
+		}
+		words[i] = string(r)
+	}
+	return strings.Join(words, " ")
 }
 
 // paragraphs склеивает строки абзацев: переносы строк внутри абзаца --

@@ -20,7 +20,11 @@ export const getSectionChunks = (book, n, variant) =>
   request(`/api/books/${encodeURIComponent(book)}/sections/${n}/chunks?variant=${encodeURIComponent(variant)}`);
 export const getChunk = (variant, id) =>
   request(`/api/chunks/${encodeURIComponent(variant)}/${encodeURIComponent(id)}`);
-export const getCompare = () => request('/api/compare');
+export const ask = (question) => request('/api/ask', { method: 'POST', body: JSON.stringify({ question }) });
+export const getControls = () => request('/api/controls');
+export const getRagEval = () => request('/api/rag-eval');
+export const startRagEval = (force) => request('/api/rag-eval', { method: 'POST', body: JSON.stringify({ force }) });
+export const getExperiment = () => request('/api/experiment');
 export const search = (query, variants, book, k = 5) =>
   request('/api/search', { method: 'POST', body: JSON.stringify({ query, variants, book, k }) });
 export const startIndex = (rebuild) =>
@@ -28,7 +32,16 @@ export const startIndex = (rebuild) =>
 
 // indexEvents -- поток событий индексации. Возвращает функцию отписки.
 export function indexEvents(since, onEvent, onEnd) {
-  const src = new EventSource(`/api/index/events?since=${since}`);
+  return jobEvents('/api/index/events', since, onEvent, onEnd);
+}
+
+// ragEvalEvents -- поток событий прогона контрольных вопросов.
+export function ragEvalEvents(since, onEvent, onEnd) {
+  return jobEvents('/api/rag-eval/events', since, onEvent, onEnd);
+}
+
+function jobEvents(path, since, onEvent, onEnd) {
+  const src = new EventSource(`${path}?since=${since}`);
   src.onmessage = (m) => {
     try {
       onEvent(JSON.parse(m.data));

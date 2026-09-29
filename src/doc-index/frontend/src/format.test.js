@@ -19,14 +19,14 @@ import {
 } from './format.js';
 
 test('маршруты туда и обратно', () => {
-  assert.deepEqual(parseRoute(''), { view: 'search', params: {} });
-  assert.deepEqual(parseRoute('#/compare'), { view: 'compare', params: {} });
+  assert.deepEqual(parseRoute(''), { view: 'ask', params: {} });
+  assert.deepEqual(parseRoute('#/quality'), { view: 'quality', params: {} });
   const h = readHash('tom', 3, 'structure-tom-0012', 'structure');
   assert.equal(h, '#/read/tom/3?c=structure-tom-0012&v=structure');
   assert.deepEqual(parseRoute(h), { view: 'read', book: 'tom', section: 3, params: { c: 'structure-tom-0012', v: 'structure' } });
   assert.equal(routeHash('search', { q: 'забор', qid: '' }), '#/search?q=%D0%B7%D0%B0%D0%B1%D0%BE%D1%80');
   assert.equal(parseRoute(routeHash('search', { q: 'забор' })).params.q, 'забор');
-  assert.equal(parseRoute('#/nonsense').view, 'search');
+  assert.equal(parseRoute('#/nonsense').view, 'ask');
 });
 
 test('склонения и числа', () => {
@@ -107,4 +107,25 @@ test('примеры вопросов поровну из книг', () => {
     pickExamples(qs, 3).map((q) => q.id),
     ['t1', 'h1', 't2']
   );
+});
+
+import { splitCitations, queryModeTitle } from './format.js';
+
+test('сноски в ответе', () => {
+  assert.deepEqual(splitCitations('Яблоко [1]. И змей [2, 3][4].'), [
+    { text: 'Яблоко ' },
+    { cite: 1 },
+    { text: '. И змей ' },
+    { cite: 2 },
+    { cite: 3 },
+    { cite: 4 },
+    { text: '.' },
+  ]);
+  assert.deepEqual(splitCitations('без сносок'), [{ text: 'без сносок' }]);
+  assert.deepEqual(splitCitations(''), []);
+});
+
+test('подпись режима поиска', () => {
+  assert.equal(queryModeTitle({ query: 'en', hybrid: true }), 'перевод на английский · + BM25');
+  assert.equal(queryModeTitle({ query: 'raw', parent: 'structure' }), 'small-to-big · вопрос как есть');
 });

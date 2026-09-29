@@ -92,7 +92,7 @@ func TestItalicsAndHucksContents(t *testing.T) {
 	// оглавление в стиле «Гекльберри Финна»: «CHAPTER I.» отдельной строкой
 	raw := "*** START OF THE PROJECT GUTENBERG EBOOK 76 ***\n\nCONTENTS.\n\nCHAPTER I.\nCivilizing Huck.—Miss Watson.\n\n" +
 		"CHAPTER THE LAST.\nOut of Bondage.\n\n\nILLUSTRATIONS.\n\n Old Mrs. Hotchkiss\n\n\nNOTICE.\n\nPersons will be shot.\n\n\n" +
-		"CHAPTER I.\n\n\nYou don’t know about me _without_ you have read\na book.\n\n\nCHAPTER THE LAST\n\n\nTHE END.\n\n" +
+		"CHAPTER I.\n\n\nYou don’t know about me _without_ you have read\na book.\n\n\nCHAPTER THE LAST\n\n\nThe first time I catched Tom private I asked him what was his idea.\n\nTHE END.\n\n" +
 		"*** END OF THE PROJECT GUTENBERG EBOOK 76 ***\n"
 	b, err := book.Parse(76, []byte(raw))
 	if err != nil {
@@ -182,5 +182,57 @@ func TestFetcherRejectsNonGutenberg(t *testing.T) {
 	f := &book.Fetcher{Mirror: srv.URL, Dir: t.TempDir()}
 	if _, _, err := f.Get(context.Background(), 74); err == nil || !strings.Contains(err.Error(), "положить файл вручную") {
 		t.Fatalf("ожидалась понятная ошибка, получено %v", err)
+	}
+}
+
+// chapterText -- абзац, которого хватает, чтобы глава считалась главой.
+func chapterText(word string) string {
+	return strings.Repeat("The "+word+" went on and on along the river bank. ", 20) + "\n\n"
+}
+
+func TestHeadingFormats(t *testing.T) {
+	raw := "*** START OF THE PROJECT GUTENBERG EBOOK X ***\n\n" +
+		// оглавление римскими цифрами, сплошным блоком
+		"CONTENTS\n\nCHAPTER I. The Start\nCHAPTER II. The Middle\nCHAPTER III. The End\n\n\n" +
+		// тело: арабские цифры, название на следующей строке или отдельным абзацем
+		"CHAPTER 1\n\nTHE START OF IT ALL\n\n" + chapterText("start") +
+		"Chapter 2.\n" + "A QUIET MIDDLE\n\n" + chapterText("middle") +
+		"CHAPTER 3\n\n" + chapterText("end") +
+		// указатель в конце книги -- тоже «Chapter N.», но без текста
+		"NOTES\n\nChapter 1. see above\n\nChapter 3. and here\n\n" +
+		"*** END OF THE PROJECT GUTENBERG EBOOK X ***"
+	b, err := book.Parse(9, []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, s := range b.Sections {
+		got = append(got, s.Key+"="+s.Title)
+	}
+	want := "1=The Start|2=The Middle|3=The End"
+	if strings.Join(got, "|") != want {
+		t.Fatalf("разделы %q, ожидалось %q", strings.Join(got, "|"), want)
+	}
+	if strings.Contains(b.Text, "THE START OF IT ALL") {
+		t.Errorf("название главы попало в текст: %.200q", b.Text)
+	}
+	// указатель остаётся текстом последней главы, но главой не становится
+	if !strings.Contains(b.Text, "NOTES") || len(b.Sections) != 3 {
+		t.Errorf("хвост после последней главы: %d разделов", len(b.Sections))
+	}
+	if s, ok := b.FindSection("II"); !ok || s.Key != "2" || !book.SameKey("THE LAST", "the last") {
+		t.Errorf("римский ключ к арабской главе: %+v %v", s, ok)
+	}
+}
+
+func TestTitleFromOwnLine(t *testing.T) {
+	raw := "*** START OF THE PROJECT GUTENBERG EBOOK X ***\n\nCHAPTER I\n\nKING ARTHUR'S COURT\n\n" + chapterText("court") +
+		"CHAPTER II\n\n“Tom!” said she.\n\n" + chapterText("house") + "*** END OF THE PROJECT GUTENBERG EBOOK X ***"
+	b, err := book.Parse(9, []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Sections[0].Title != "King Arthur's Court" || b.Sections[1].Title != "" {
+		t.Fatalf("названия: %q, %q", b.Sections[0].Title, b.Sections[1].Title)
 	}
 }
