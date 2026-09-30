@@ -2,13 +2,13 @@ package rag
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"doc-index/internal/llm"
+	"doc-index/internal/rerank"
 	"doc-index/internal/retrieve"
 	"doc-index/internal/search"
 )
@@ -30,8 +30,6 @@ func (f *fakeLLM) Chat(_ context.Context, _ llm.Provider, req llm.Request) (llm.
 	switch {
 	case strings.HasPrefix(sys, "You prepare"):
 		kind = "rewrite"
-	case strings.HasPrefix(sys, "Ты проверяешь"):
-		kind = "judge"
 	case strings.Contains(sys, "<sources>"):
 		kind = "rag"
 	}
@@ -117,34 +115,6 @@ func TestPromptEscapesSources(t *testing.T) {
 	}
 }
 
-func TestJudge(t *testing.T) {
-	f := &fakeLLM{reply: func(_, user string) (string, error) {
-		if !strings.Contains(user, "Ожидание: яблоко") {
-			return "", errors.New("нет ожидания")
-		}
-		return `Here: {"a":{"verdict":"Wrong","reason":"змей"},"b":{"verdict":"correct","reason":"яблоко"}}`, nil
-	}}
-	a, b, err := Judge(context.Background(), LLM{Client: f}, Control{Q: "что?", Expected: "яблоко"}, "змей", "яблоко [1]")
-	if err != nil || a.Verdict != "wrong" || b.Verdict != "correct" {
-		t.Fatalf("%+v %+v %v", a, b, err)
-	}
-	f.reply = func(_, _ string) (string, error) { return `{"a":{"verdict":"maybe"},"b":{"verdict":"correct"}}`, nil }
-	if _, _, err := Judge(context.Background(), LLM{Client: f}, Control{}, "x", "y"); err == nil {
-		t.Fatal("неизвестный вердикт принят")
-	}
-}
-
-func TestSourcesHit(t *testing.T) {
-	c := Control{Book: "wilson", Chapters: []string{"III"}}
-	hits := []search.Hit{
-		{Book: "tom", Sections: []search.SectionRef{{Key: "III"}}},
-		{Book: "wilson", Sections: []search.SectionRef{{Key: "2"}, {Key: "3"}}}, // римская глава ↔ арабская
-	}
-	if !SourcesHit(c, hits) || SourcesHit(c, hits[:1]) {
-		t.Fatal("попадание источника")
-	}
-}
-
 func TestStripThinking(t *testing.T) {
 	if got := stripThinking("<think>a\nb</think>\n Ответ <think>x</think>готов"); got != "Ответ готов" {
 		t.Fatalf("%q", got)
@@ -161,5 +131,30 @@ func TestConfigNeedsRewrite(t *testing.T) {
 	if !(retrieve.Config{Query: retrieve.QueryRaw, Hybrid: true}).NeedsRewrite() ||
 		!(retrieve.Config{Query: retrieve.QueryEnglish}).NeedsRewrite() {
 		t.Error("перевод и BM25 требуют переписывания")
+	}
+}
+
+func TestPromptWithoutSources(t *testing.T) {
+	p := Prompt("Что Твен писал об Антарктиде?", nil)
+	if p != "<sources>\n</sources>\n\nВопрос: Что Твен писал об Антарктиде?" {
+		t.Fatalf("%q", p)
+	}
+}
+
+func TestSettingsValidate(t *testing.T) {
+	ok := Settings{BaseK: 5, Query: retrieve.QueryHyDE}
+	ok.KBefore, ok.KAfter, ok.RelMin, ok.Order = 20, 5, 0.5, rerank.OrderCosine
+	if ok.Validate() != nil {
+		t.Fatal("допустимые настройки")
+	}
+	bad := ok
+	bad.Query = "fuse"
+	if bad.Validate() == nil {
+		t.Error("режим запроса")
+	}
+	bad = ok
+	bad.BaseK = 0
+	if bad.Validate() == nil {
+		t.Error("top-K базового режима")
 	}
 }

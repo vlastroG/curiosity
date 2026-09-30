@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getControls, getQuestions, getStatus } from './api.js';
+import { getQuestions, getStatus } from './api.js';
 import { parseRoute, routeHash } from './format.js';
 import Header from './components/Header.jsx';
 import SearchView from './components/SearchView.jsx';
 import ReaderView from './components/ReaderView.jsx';
 import AskView from './components/AskView.jsx';
-import QualityView from './components/QualityView.jsx';
 import IndexView from './components/IndexView.jsx';
 
 function useRoute() {
@@ -23,7 +22,6 @@ export default function App() {
   const [status, setStatus] = useState(null);
   const [statusError, setStatusError] = useState('');
   const [questions, setQuestions] = useState([]);
-  const [controls, setControls] = useState([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -41,9 +39,6 @@ export default function App() {
     getQuestions()
       .then((r) => setQuestions(r.questions || []))
       .catch(() => setQuestions([]));
-    getControls()
-      .then((r) => setControls(r.controls || []))
-      .catch(() => setControls([]));
   }, []);
 
   useEffect(() => {
@@ -71,12 +66,11 @@ export default function App() {
     <div className="app">
       <Header route={route} status={status} error={statusError} />
       <main className="main">
-        {route.view === 'ask' && <AskView route={route} status={status} controls={controls} indexReady={indexReady} />}
+        {route.view === 'ask' && <AskView route={route} status={status} questions={questions} indexReady={indexReady} />}
         {route.view === 'search' && (
           <SearchView route={route} status={status} questions={questions} indexReady={indexReady} />
         )}
         {route.view === 'read' && <ReaderView route={route} status={status} />}
-        {route.view === 'quality' && <QualityView status={status} />}
         {route.view === 'index' && (
           <IndexView
             status={status}

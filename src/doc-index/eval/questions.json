@@ -87,5 +87,14 @@
   {"id": "huck-en-hell", "lang": "en", "book": "huck", "chapters": ["XXXI"], "evidence": ["go to hell"],
    "q": "Why did Huck decide he would go to hell rather than turn Jim in?"},
   {"id": "huck-en-feud", "lang": "en", "book": "huck", "chapters": ["XVIII"], "evidence": ["Shepherdson"],
-   "q": "What was the feud between the Grangerfords and the Shepherdsons about?"}
+   "q": "What was the feud between the Grangerfords and the Shepherdsons about?"},
+
+  {"id": "off-holmes", "lang": "ru", "book": "", "q": "Как Шерлок Холмс разгадал тайну собаки Баскервилей?"},
+  {"id": "off-natasha", "lang": "ru", "book": "", "q": "Что Наташа Ростова делала на своём первом балу?"},
+  {"id": "off-gulliver", "lang": "ru", "book": "", "q": "Чем закончилось путешествие Гулливера в страну лилипутов?"},
+  {"id": "off-moon", "lang": "ru", "book": "", "q": "Как Марк Твен описывает свой полёт на Луну?"},
+  {"id": "off-antarctica", "lang": "ru", "book": "", "q": "Что Твен рассказывает о своём путешествии в Антарктиду?"},
+  {"id": "off-caesar", "lang": "ru", "book": "", "q": "Кто убил Цезаря в пьесе Шекспира и почему?"},
+  {"id": "off-nemo", "lang": "ru", "book": "", "q": "Как капитан Немо управлял «Наутилусом»?"},
+  {"id": "off-titanic", "lang": "en", "book": "", "q": "How did the Titanic sink?"}
 ]

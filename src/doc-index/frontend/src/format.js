@@ -12,7 +12,7 @@ export function parseRoute(hash) {
   if (view === 'read') {
     return { view, book: parts[1] || '', section: parts[2] === undefined ? null : Number(parts[2]), params };
   }
-  if (['ask', 'search', 'quality', 'index'].includes(view)) {
+  if (['ask', 'search', 'index'].includes(view)) {
     return { view, params };
   }
   return { view: 'ask', params: {} };
@@ -212,4 +212,46 @@ export function queryModeTitle(cfg) {
   if (!cfg) return '';
   const q = { raw: 'вопрос как есть', en: 'перевод на английский', hyde: 'HyDE — гипотетический абзац-ответ', fuse: 'вопрос + перевод' }[cfg.query] || cfg.query;
   return [cfg.parent ? 'small-to-big' : '', q, cfg.hybrid ? '+ BM25' : ''].filter(Boolean).join(' · ');
+}
+
+// ---------- воронка второго этапа ----------
+
+export const STAGE = {
+  kept: { text: 'в ответе', tone: 'good' },
+  top: { text: 'не вошёл в top-K', tone: 'fair' },
+  rel: { text: 'отсёк реранкер', tone: 'bad' },
+  sim: { text: 'ниже порога косинуса', tone: 'muted' },
+};
+
+// funnelLine -- «20 кандидатов → 14 прошли порог косинуса → 5 одобрил реранкер → 3 в ответе».
+export function funnelLine(f) {
+  if (!f) return '';
+  const parts = [`${f.total} ${plural(f.total, 'кандидат', 'кандидата', 'кандидатов')}`];
+  if (f.passedSim !== f.total) parts.push(`${f.passedSim} прошли порог косинуса`);
+  parts.push(`${f.passedRel} ${plural(f.passedRel, 'одобрил', 'одобрил', 'одобрил')} реранкер`);
+  parts.push(`${f.kept} в ответе`);
+  return parts.join(' → ');
+}
+
+// sameSettings -- настройки совпадают (для кнопки «спросить снова»).
+export function sameSettings(a, b) {
+  if (!a || !b) return false;
+  return ['baseK', 'query', 'kBefore', 'simMin', 'relMin', 'kAfter', 'order'].every((k) => Number(a[k]) === Number(b[k]) || a[k] === b[k]);
+}
+
+// clampSettings -- числа в допустимых диапазонах, как проверяет сервер.
+export function clampSettings(s) {
+  const c = (v, lo, hi, d) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
+  };
+  return {
+    baseK: Math.round(c(s.baseK, 1, 10, 5)),
+    query: ['hyde', 'en', 'raw'].includes(s.query) ? s.query : 'hyde',
+    kBefore: Math.round(c(s.kBefore, 1, 50, 20)),
+    simMin: c(s.simMin, 0, 1, 0),
+    relMin: c(s.relMin, 0, 1, 0.5),
+    kAfter: Math.round(c(s.kAfter, 1, 10, 5)),
+    order: ['rerank', 'cosine', 'fused'].includes(s.order) ? s.order : 'cosine',
+  };
 }

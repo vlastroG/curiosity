@@ -4,7 +4,6 @@ const TABS = [
   { view: 'ask', title: 'Спросить' },
   { view: 'search', title: 'Поиск' },
   { view: 'read', title: 'Книги' },
-  { view: 'quality', title: 'Качество' },
   { view: 'index', title: 'Индекс' },
 ];
 
@@ -35,7 +34,7 @@ export default function Header({ route, status, error }) {
             <span className="brand-title">Twain Expert</span>
             <span className="brand-sub">
               {status?.books?.length
-                ? `${status.books.length} ${plural(status.books.length, 'книга', 'книги', 'книг')} Марка Твена · ответы с RAG и без`
+                ? `${status.books.length} ${plural(status.books.length, 'книга', 'книги', 'книг')} Марка Твена · ответы по отрывкам из книг`
                 : 'книги Марка Твена с Project Gutenberg'}
             </span>
           </span>

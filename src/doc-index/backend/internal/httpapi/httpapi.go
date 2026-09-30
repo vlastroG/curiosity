@@ -19,7 +19,6 @@ import (
 	"doc-index/internal/chunk"
 	"doc-index/internal/compare"
 	"doc-index/internal/embed"
-	"doc-index/internal/experiment"
 	"doc-index/internal/index"
 	"doc-index/internal/rag"
 	"doc-index/internal/search"
@@ -47,12 +46,9 @@ type Config struct {
 	StaticDir string
 
 	// RAG
-	Agent          *rag.Agent
-	LLMError       error       // модель ответов недоступна (нет ключа и т. п.)
-	EvalJobs       *index.Jobs // прогон контрольных вопросов
-	ControlsPath   string
-	RagEvalPath    string
-	ExperimentPath string
+	Agent    *rag.Agent
+	LLMError error // модель ответов недоступна (нет ключа и т. п.)
+	Tuned    bool  // настройки по умолчанию подобраны командой experiment
 }
 
 // API -- обработчики.
@@ -78,15 +74,9 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/books/{book}/sections/{n}", a.section)
 	mux.HandleFunc("GET /api/books/{book}/sections/{n}/chunks", a.sectionChunks)
 	mux.HandleFunc("GET /api/chunks/{variant}/{id}", a.chunk)
-	mux.HandleFunc("GET /api/compare", a.compare)
 	mux.HandleFunc("POST /api/index", a.startIndex)
 	mux.HandleFunc("GET /api/index/events", a.indexEvents)
 	mux.HandleFunc("POST /api/ask", a.ask)
-	mux.HandleFunc("GET /api/controls", a.controls)
-	mux.HandleFunc("GET /api/rag-eval", a.ragEval)
-	mux.HandleFunc("POST /api/rag-eval", a.startRagEval)
-	mux.HandleFunc("GET /api/rag-eval/events", a.ragEvalEvents)
-	mux.HandleFunc("GET /api/experiment", a.experiment)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -170,17 +160,15 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 	}
 	out["variants"] = vs
 
-	ragInfo := map[string]any{}
+	ragInfo := map[string]any{"embedModel": a.Searcher.Variants[0].Model}
 	if a.Agent != nil {
 		ragInfo["model"] = a.Agent.LLM.Model
-		ragInfo["retrieval"] = a.Agent.Config
-		ragInfo["topK"] = a.Agent.K
+		ragInfo["reranker"] = a.Agent.Reranker.Name()
+		ragInfo["defaults"] = a.Agent.Defaults
+		ragInfo["tuned"] = a.Tuned
 	}
 	if a.LLMError != nil {
 		ragInfo["error"] = a.LLMError.Error()
-	}
-	if a.EvalJobs != nil {
-		ragInfo["evalJob"] = a.EvalJobs.State()
 	}
 	out["rag"] = ragInfo
 
@@ -402,42 +390,6 @@ func (a *API) chunk(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, errors.New("чанк не найден — возможно, индекс перестроен"))
 }
 
-// compare -- сравнение вариантов. Пересчитывается, когда поменялся индекс
-// или файл контрольных вопросов.
-func (a *API) compare(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	ver, err := a.Store.Meta(ctx, "index_version")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	st, err := os.Stat(a.EvalPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("файл вопросов: %w", err))
-		return
-	}
-	key := ver + "|" + st.ModTime().String()
-
-	a.cmpMu.Lock()
-	defer a.cmpMu.Unlock()
-	if a.cmp != nil && a.cmpKey == key {
-		writeJSON(w, http.StatusOK, a.cmp)
-		return
-	}
-	qs, err := compare.Load(a.EvalPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	rep, err := compare.Build(ctx, a.Searcher, qs, a.Params)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	a.cmp, a.cmpKey = &rep, key
-	writeJSON(w, http.StatusOK, rep)
-}
-
 func (a *API) startIndex(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Rebuild bool `json:"rebuild"`
@@ -506,7 +458,8 @@ func streamJob(w http.ResponseWriter, r *http.Request, jobs *index.Jobs) {
 	}
 }
 
-// ask -- ответ на вопрос без RAG и с RAG.
+// ask -- ответ на вопрос двумя вариантами RAG. Настройки -- из запроса,
+// недостающие берутся по умолчанию.
 func (a *API) ask(w http.ResponseWriter, r *http.Request) {
 	if a.Agent == nil || a.LLMError != nil {
 		msg := "модель ответов не настроена"
@@ -516,9 +469,10 @@ func (a *API) ask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, errors.New(msg))
 		return
 	}
-	var req struct {
-		Question string `json:"question"`
-	}
+	req := struct {
+		Question string        `json:"question"`
+		Settings *rag.Settings `json:"settings"`
+	}{}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, errors.New("неверный запрос"))
 		return
@@ -532,139 +486,31 @@ func (a *API) ask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("вопрос длиннее 500 символов"))
 		return
 	}
+	st := a.Agent.Defaults
+	if req.Settings != nil {
+		st = *req.Settings
+	}
+	if err := st.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	if err := a.Searcher.Refresh(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if len(a.Searcher.Chunks(a.Agent.Config.Variant)) == 0 {
+	if len(a.Searcher.Chunks(a.Agent.Variant)) == 0 {
 		writeError(w, http.StatusConflict, search.ErrEmptyIndex)
 		return
 	}
-	res := a.Agent.Ask(r.Context(), q)
-	model := a.Searcher.Variants[0].Model
-	if res.RAG.Error == "" && len(res.RAG.Sources) > 0 {
+	res := a.Agent.Ask(r.Context(), q, st)
+	// только GPU: эмбеддинги и реранкер загружаются первыми запросами
+	for _, model := range []string{a.Searcher.Variants[0].Model, a.Agent.Reranker.Name()} {
 		if err := a.requireGPU(r.Context(), model); err != nil {
-			res.RAG.Error = err.Error()
+			writeError(w, http.StatusServiceUnavailable, err)
+			return
 		}
 	}
-	out := map[string]any{"result": res}
-	if cs, err := a.loadControls(); err == nil {
-		for _, c := range cs {
-			if c.Q == q {
-				out["control"] = c
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (a *API) loadControls() ([]rag.Control, error) {
-	cs, err := rag.LoadControls(a.ControlsPath)
-	if err != nil {
-		return nil, err
-	}
-	books := map[string]*book.Book{}
-	for id, info := range a.Searcher.Books() {
-		books[id] = info.Book
-	}
-	return rag.ValidateControls(cs, books), nil
-}
-
-func (a *API) controls(w http.ResponseWriter, r *http.Request) {
-	if err := a.Searcher.Refresh(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	cs, err := a.loadControls()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"controls": cs})
-}
-
-func (a *API) ragEval(w http.ResponseWriter, _ *http.Request) {
-	rep, err := rag.LoadReport(a.RagEvalPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"report": rep, "job": a.EvalJobs.State()})
-}
-
-func (a *API) startRagEval(w http.ResponseWriter, r *http.Request) {
-	if a.Agent == nil || a.LLMError != nil {
-		writeError(w, http.StatusServiceUnavailable, errors.New("модель ответов не настроена"))
-		return
-	}
-	var req struct {
-		Force bool `json:"force"`
-	}
-	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req)
-	if err := a.Searcher.Refresh(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	controls, err := a.loadControls()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	err = a.EvalJobs.Start(context.WithoutCancel(r.Context()), func(ctx context.Context, emit func(index.Event)) error {
-		total := 0
-		for _, c := range controls {
-			if c.Valid {
-				total++
-			}
-		}
-		done := 0
-		rep, err := a.Agent.Evaluate(ctx, controls, a.RagEvalPath, req.Force, func(_ int, row rag.EvalRow, skipped bool) {
-			done++
-			msg := fmt.Sprintf("%s: без RAG — %s, с RAG — %s", row.Control.Q, verdictRu(row.NoRAG.Verdict), verdictRu(row.RAG.Verdict))
-			if skipped {
-				msg = row.Control.Q + ": уже оценён"
-			} else if row.JudgeError != "" {
-				msg = row.Control.Q + ": " + row.JudgeError
-			}
-			log.Printf("[rag-eval] %s", msg)
-			emit(index.Event{Stage: "eval", Message: msg, Done: done, Total: total})
-		})
-		if err == nil {
-			emit(index.Event{Stage: "done", Message: fmt.Sprintf("готово: с RAG верно %d из %d, без RAG — %d",
-				rep.RAG.Correct, len(rep.Rows), rep.NoRAG.Correct)})
-		}
-		return err
-	})
-	if errors.Is(err, index.ErrBusy) {
-		writeError(w, http.StatusConflict, errors.New("прогон уже идёт"))
-		return
-	}
-	writeJSON(w, http.StatusAccepted, a.EvalJobs.State())
-}
-
-func (a *API) ragEvalEvents(w http.ResponseWriter, r *http.Request) {
-	streamJob(w, r, a.EvalJobs)
-}
-
-func verdictRu(v string) string {
-	switch v {
-	case "correct":
-		return "верно"
-	case "partial":
-		return "частично"
-	case "wrong":
-		return "неверно"
-	}
-	return "—"
-}
-
-func (a *API) experiment(w http.ResponseWriter, _ *http.Request) {
-	rep, ok, err := experiment.Load(a.ExperimentPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"exists": ok, "report": rep})
+	writeJSON(w, http.StatusOK, map[string]any{"result": res})
 }
 
 func sortedBooks(m map[string]*search.BookInfo) []*search.BookInfo {
@@ -722,6 +568,10 @@ func securityHeaders(next http.Handler) http.Handler {
 func spa(dir string) http.Handler {
 	files := http.FileServer(http.Dir(dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeError(w, http.StatusNotFound, errors.New("нет такого API"))
+			return
+		}
 		path := filepath.Join(dir, filepath.Clean("/"+r.URL.Path))
 		if st, err := os.Stat(path); err != nil || st.IsDir() {
 			http.ServeFile(w, r, filepath.Join(dir, "index.html"))

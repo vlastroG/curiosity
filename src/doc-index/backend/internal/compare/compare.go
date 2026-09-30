@@ -106,7 +106,7 @@ func Build(ctx context.Context, s *search.Searcher, qs []Question, p chunk.Param
 	rep := Report{GeneratedAt: time.Now(), Params: p}
 	var valid []Question
 	for _, q := range qs {
-		if q.Valid {
+		if q.Valid && !q.OffTopic() {
 			valid = append(valid, q)
 		} else {
 			rep.Invalid = append(rep.Invalid, q)

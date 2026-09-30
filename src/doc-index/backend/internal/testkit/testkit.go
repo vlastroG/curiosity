@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -120,13 +121,14 @@ func Vector(text string) []float32 {
 type Ollama struct {
 	*httptest.Server
 
-	mu     sync.Mutex
-	Models map[string]bool // скачанные модели
-	VRAM   int64           // сколько модели в видеопамяти; 0 -- «считает на CPU»
-	Calls  int             // вызовов /api/embed
-	Inputs int             // входов в них всего
-	FailAt int             // упасть на этом вызове /api/embed (0 -- никогда)
-	loaded map[string]bool
+	mu      sync.Mutex
+	Models  map[string]bool // скачанные модели
+	VRAM    int64           // сколько модели в видеопамяти; 0 -- «считает на CPU»
+	Calls   int             // вызовов /api/embed
+	Inputs  int             // входов в них всего
+	FailAt  int             // упасть на этом вызове /api/embed (0 -- никогда)
+	Reranks int             // вызовов /api/generate (реранкер)
+	loaded  map[string]bool
 }
 
 // NewOllama -- поддельная Ollama, у которой уже скачаны models и всё на GPU.
@@ -200,6 +202,35 @@ func NewOllama(models ...string) *Ollama {
 		}
 		writeJSON(w, map[string]any{"model": req.Model, "embeddings": vecs, "prompt_eval_count": tokens})
 	})
+	// реранкер: «yes» тем вероятнее, чем больше слов запроса есть в отрывке
+	mux.HandleFunc("POST /api/generate", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model  string
+			Prompt string
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		o.mu.Lock()
+		known := o.Models[req.Model]
+		if known {
+			o.loaded[req.Model] = true
+			o.Reranks++
+		}
+		o.mu.Unlock()
+		if !known {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, map[string]string{"error": "model not found"})
+			return
+		}
+		p := Relevance(between(req.Prompt, "<Query>: ", "\n"), between(req.Prompt, "<Document>: ", "<|im_end|>"))
+		p = math.Min(math.Max(p, 0.001), 0.999)
+		writeJSON(w, map[string]any{"response": "yes", "logprobs": []any{map[string]any{
+			"token": "yes", "logprob": math.Log(p),
+			"top_logprobs": []any{
+				map[string]any{"token": "yes", "logprob": math.Log(p)},
+				map[string]any{"token": "No", "logprob": math.Log(1 - p)},
+			},
+		}}})
+	})
 	mux.HandleFunc("GET /api/ps", func(w http.ResponseWriter, _ *http.Request) {
 		o.mu.Lock()
 		defer o.mu.Unlock()
@@ -212,6 +243,50 @@ func NewOllama(models ...string) *Ollama {
 	})
 	o.Server = httptest.NewServer(mux)
 	return o
+}
+
+// Relevance -- доля слов запроса (от трёх букв), которые есть в документе.
+func Relevance(query, doc string) float64 {
+	words := func(s string) []string {
+		return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) })
+	}
+	in := map[string]bool{}
+	for _, w := range words(doc) {
+		in[w] = true
+	}
+	total, hit := 0, 0
+	for _, w := range words(query) {
+		if len(w) < 3 {
+			continue
+		}
+		total++
+		if in[w] {
+			hit++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(hit) / float64(total)
+}
+
+func between(s, from, to string) string {
+	i := strings.Index(s, from)
+	if i < 0 {
+		return ""
+	}
+	s = s[i+len(from):]
+	if j := strings.Index(s, to); j >= 0 {
+		s = s[:j]
+	}
+	return s
+}
+
+// RerankCalls -- сколько раз звали реранкер.
+func (o *Ollama) RerankCalls() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.Reranks
 }
 
 // Stats -- сколько было вызовов и входов.

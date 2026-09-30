@@ -20,6 +20,7 @@ import (
 	"doc-index/internal/index"
 	"doc-index/internal/llm"
 	"doc-index/internal/rag"
+	"doc-index/internal/rerank"
 	"doc-index/internal/retrieve"
 	"doc-index/internal/search"
 	"doc-index/internal/store"
@@ -42,7 +43,7 @@ func setup(t *testing.T) *fixture {
 	_ = os.MkdirAll(web, 0o755)
 	_ = os.WriteFile(filepath.Join(web, "index.html"), []byte("<!doctype html><title>ui</title>"), 0o644)
 
-	o := testkit.NewOllama("bge-m3", "nomic-embed-text")
+	o := testkit.NewOllama("bge-m3", "nomic-embed-text", "reranker")
 	t.Cleanup(o.Close)
 	st, err := store.Open(filepath.Join(dir, "index.db"))
 	if err != nil {
@@ -54,22 +55,20 @@ func setup(t *testing.T) *fixture {
 	ix := &index.Indexer{Store: st, Ollama: client, Books: []int{74}, Variants: variants,
 		Fetcher: &book.Fetcher{Dir: filepath.Join(dir, "sources")}, Params: chunk.DefaultParams, Batch: 16}
 
-	controls := `[{"id":"c1","q":"whitewash fence brush","expected":"забор красили","book":"tom","chapters":["I"],"evidence":["whitewash"]},
-		{"id":"c2","q":"нет в книгах","expected":"честный отказ"}]`
-	_ = os.WriteFile(filepath.Join(dir, "rag.json"), []byte(controls), 0o644)
 	searcher := &search.Searcher{Store: st, Embedder: client, Variants: variants}
 	agent := &rag.Agent{
 		LLM:       rag.LLM{Client: fakeLLM{}, Model: "fake"},
 		Rewriter:  &rag.Rewriter{LLM: rag.LLM{Client: fakeLLM{}, Model: "fake"}, Path: filepath.Join(dir, "rewrites.json")},
 		Retriever: &retrieve.Retriever{Searcher: searcher},
-		Config:    retrieve.Config{ID: "bge-m3/en", Variant: "structure", Query: retrieve.QueryEnglish},
-		K:         3,
+		Variant:   "structure",
+		Reranker:  rerank.NewOllama(o.URL, "reranker", 10*time.Second),
+		Defaults: rag.Settings{BaseK: 3, Query: retrieve.QueryHyDE,
+			Params: rerank.Params{KBefore: 10, SimMin: 0, RelMin: 0.5, KAfter: 3, Order: rerank.OrderRerank}},
 	}
 	h := httpapi.New(httpapi.Config{
 		Store: st, Searcher: searcher,
 		Ollama: client, OllamaURL: o.URL, Jobs: &index.Jobs{},
-		Agent: agent, EvalJobs: &index.Jobs{}, ControlsPath: filepath.Join(dir, "rag.json"),
-		RagEvalPath: filepath.Join(dir, "rag-eval.json"), ExperimentPath: filepath.Join(dir, "experiments", "report.json"),
+		Agent: agent,
 		Index: func(ctx context.Context, rebuild bool, emit func(index.Event)) error {
 			_, err := ix.Run(ctx, rebuild, emit)
 			return err
@@ -256,10 +255,6 @@ func TestSearchReadAndCompare(t *testing.T) {
 	if len(qs.Questions) != 1 || qs.Questions[0]["valid"] != true {
 		t.Errorf("вопросы: %+v", qs)
 	}
-	var rep map[string]any
-	if code := f.get(t, "/api/compare", &rep); code != 200 || len(rep["variants"].([]any)) != 4 {
-		t.Fatalf("сравнение: %d", code)
-	}
 }
 
 func TestSearchRefusesCPU(t *testing.T) {
@@ -329,58 +324,65 @@ func TestAskBothModes(t *testing.T) {
 	if code := f.post(t, "/api/ask", `{"question":"  "}`, nil); code != http.StatusBadRequest {
 		t.Errorf("пустой вопрос: %d", code)
 	}
+	if code := f.post(t, "/api/ask", `{"question":"q","settings":{"baseK":5,"query":"hyde","kBefore":99,"kAfter":5,"order":"rerank"}}`, &e); code != http.StatusBadRequest ||
+		!strings.Contains(e["error"], "top-K до") {
+		t.Errorf("настройки вне диапазона: %d %v", code, e)
+	}
+
 	var resp struct {
-		Result  rag.Result  `json:"result"`
-		Control rag.Control `json:"control"`
+		Result rag.Result `json:"result"`
 	}
 	if code := f.post(t, "/api/ask", `{"question":"whitewash fence brush"}`, &resp); code != 200 {
 		t.Fatalf("ask: %d", code)
 	}
 	r := resp.Result
-	if r.NoRAG.Text == "" || !strings.Contains(r.RAG.Text, "[1]") || len(r.RAG.Sources) != 3 {
-		t.Fatalf("ответы: %+v", r)
+	if !strings.Contains(r.Base.Text, "[1]") || len(r.Base.Sources) != 3 || r.Base.Sources[0].Rel != nil {
+		t.Fatalf("базовый: %+v", r.Base)
 	}
-	if r.RAG.Rewrite.EN == "" || r.RAG.Queries[0] != r.RAG.Rewrite.EN || !r.RAG.Rewritten {
-		t.Errorf("поиск шёл не по переводу: %+v", r.RAG)
+	im := r.Improved
+	if im.Error != "" || im.Rewrite.HyDE == "" || im.SearchQuery != im.Rewrite.HyDE || im.RerankQuery != im.Rewrite.EN || !im.Rewritten {
+		t.Fatalf("улучшенный: %+v", im)
 	}
-	if r.RAG.Sources[0].Sections[0].Key != "I" || resp.Control.ID != "c1" {
-		t.Errorf("источник %+v, контрольный вопрос %+v", r.RAG.Sources[0], resp.Control)
+	fn := im.Funnel
+	if fn.Total != 10 || fn.Kept == 0 || fn.Kept > 3 || len(im.Sources) != fn.Kept || fn.Scorer != "reranker" {
+		t.Fatalf("воронка: total %d kept %d, отрывков %d", fn.Total, fn.Kept, len(im.Sources))
+	}
+	for _, s := range im.Sources {
+		if s.Rel == nil || *s.Rel < 0.5 || s.Sections[0].Key != "I" {
+			t.Errorf("отрывок %+v", s)
+		}
+	}
+	for _, c := range fn.Candidates {
+		if c.Stage == "" || c.Reason == "" {
+			t.Errorf("кандидат без стадии: %+v", c)
+		}
+	}
+
+	// свои настройки: порог реранкера 1 -- ни один отрывок не проходит
+	body := `{"question":"whitewash fence brush","settings":{"baseK":2,"query":"raw","kBefore":5,"simMin":0,"relMin":1,"kAfter":3,"order":"cosine"}}`
+	if code := f.post(t, "/api/ask", body, &resp); code != 200 {
+		t.Fatalf("ask со своими настройками: %d", code)
+	}
+	if len(resp.Result.Base.Sources) != 2 || resp.Result.Improved.Funnel.Kept != 0 || resp.Result.Improved.Rewrite.EN != "" {
+		t.Fatalf("свои настройки не применились: %+v", resp.Result.Improved.Funnel)
+	}
+	for _, path := range []string{"/api/controls", "/api/rag-eval", "/api/experiment", "/api/compare"} {
+		if code := f.get(t, path, nil); code != http.StatusNotFound {
+			t.Errorf("%s: %d, ожидался 404", path, code)
+		}
 	}
 }
 
-func TestRagEvalOverAPI(t *testing.T) {
+func TestStatusShowsDefaults(t *testing.T) {
 	f := setup(t)
-	f.buildIndex(t)
-	var cs struct {
-		Controls []rag.Control `json:"controls"`
+	var st struct {
+		Rag struct {
+			Reranker string       `json:"reranker"`
+			Defaults rag.Settings `json:"defaults"`
+		} `json:"rag"`
 	}
-	f.get(t, "/api/controls", &cs)
-	if len(cs.Controls) != 2 || !cs.Controls[0].Valid || !cs.Controls[1].Valid || cs.Controls[1].InCorpus() {
-		t.Fatalf("контрольные вопросы: %+v", cs)
-	}
-	if code := f.post(t, "/api/rag-eval", `{}`, nil); code != http.StatusAccepted {
-		t.Fatalf("старт: %d", code)
-	}
-	resp, err := http.Get(f.srv.URL + "/api/rag-eval/events")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sc := bufio.NewScanner(resp.Body)
-	for sc.Scan() && sc.Text() != "event: end" {
-	}
-	resp.Body.Close()
-	var data struct {
-		Report rag.EvalReport `json:"report"`
-	}
-	f.get(t, "/api/rag-eval", &data)
-	rep := data.Report
-	if len(rep.Rows) != 2 || rep.RAG.Correct != 2 || rep.NoRAG.Partial != 2 || rep.SourcesHit != 1 || rep.WithSource != 1 {
-		t.Fatalf("отчёт: %+v", rep)
-	}
-	var ex struct {
-		Exists bool `json:"exists"`
-	}
-	if code := f.get(t, "/api/experiment", &ex); code != 200 || ex.Exists {
-		t.Errorf("эксперимента ещё не было: %d %v", code, ex)
+	f.get(t, "/api/status", &st)
+	if st.Rag.Reranker != "reranker" || st.Rag.Defaults.KBefore != 10 || st.Rag.Defaults.Query != "hyde" {
+		t.Fatalf("%+v", st.Rag)
 	}
 }

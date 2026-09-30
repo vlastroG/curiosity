@@ -1,16 +1,16 @@
-// Command docindex -- Twain Expert: индекс книг Марка Твена и ответы на
-// вопросы о них в двух режимах -- по памяти модели и с RAG.
+// Command docindex -- Twain Expert: вопросы о книгах Марка Твена, ответ по
+// найденным отрывкам в двух вариантах -- базовый RAG и RAG с переписыванием
+// вопроса, фильтром и реранкером.
 //
 //	docindex serve              веб-интерфейс и API (по умолчанию)
 //	docindex index [--rebuild]  построить индекс: книги → чанки → эмбеддинги → SQLite
-//	docindex ask "вопрос"       ответ без RAG и с RAG из терминала
+//	docindex ask "вопрос"       оба ответа из терминала
 //	docindex search "вопрос"    найденные отрывки
-//	docindex rag-eval [--force] прогон контрольных вопросов с оценкой судьи
-//	docindex experiment         сравнение стратегий поиска на 44 вопросах
+//	docindex experiment         подбор порогов и top-K, сравнение режимов
 //	docindex stats              что лежит в индексе
 //
-// Эмбеддинги считает Ollama (OLLAMA_URL), только на видеокарте. Ответы --
-// модель RAG_MODEL (OpenRouter или DeepSeek).
+// Эмбеддинги и реранкер -- Ollama (OLLAMA_URL), только на видеокарте.
+// Ответы -- модель RAG_MODEL (OpenRouter или DeepSeek).
 package main
 
 import (
@@ -37,22 +37,18 @@ import (
 	"doc-index/internal/index"
 	"doc-index/internal/llm"
 	"doc-index/internal/rag"
+	"doc-index/internal/rerank"
 	"doc-index/internal/retrieve"
 	"doc-index/internal/search"
 	"doc-index/internal/store"
 )
 
-// Стратегия поиска по умолчанию -- победитель experiment (см. README).
-// Любую часть можно переопределить переменными окружения.
-const (
-	defaultEmbedModel = "qwen3-embedding:4b"
-	defaultQuery      = retrieve.QueryHyDE
-	defaultHybrid     = false
-	defaultSmallToBig = false
-)
-
 // defaultBooks -- 13 главных книг Твена.
 const defaultBooks = "74,76,91,93,1837,86,102,245,3177,3176,119,2895,3186"
+
+// defaultReranker -- Qwen3-Reranker-0.6B в сборке, у которой в Ollama есть
+// рабочий выходной слой (у части сборок вероятности всех токенов одинаковы).
+const defaultReranker = "B-A-M-N/qwen3-reranker-0.6b-fp16"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
@@ -75,14 +71,12 @@ func main() {
 		err = askCmd(ctx, args)
 	case "search":
 		err = searchCmd(ctx, args)
-	case "rag-eval":
-		err = ragEvalCmd(ctx, args)
 	case "experiment":
 		err = experimentCmd(ctx)
 	case "stats":
 		err = statsCmd(ctx)
 	default:
-		err = fmt.Errorf("неизвестная команда %q: serve, index, ask, search, rag-eval, experiment, stats", cmd)
+		err = fmt.Errorf("неизвестная команда %q: serve, index, ask, search, experiment, stats", cmd)
 	}
 	if err != nil {
 		log.Fatalf("ошибка: %v", err)
@@ -91,17 +85,18 @@ func main() {
 
 // app -- всё, что собирается из окружения.
 type app struct {
-	dataDir   string
-	store     *store.Store
-	ollama    *embed.Client
-	variants  []index.Variant
-	retrieval retrieve.Config
-	books     []int
-	fetcher   *book.Fetcher
-	params    chunk.Params
+	dataDir  string
+	store    *store.Store
+	ollama   *embed.Client
+	reranker *rerank.Ollama
+	variants []index.Variant
+	books    []int
+	fetcher  *book.Fetcher
+	params   chunk.Params
+	evalPath string // вопросы для подбора порогов
 
-	evalPath     string // 44 вопроса для выбора стратегии поиска
-	controlsPath string // 10 контрольных вопросов RAG
+	settings rag.Settings // настройки по умолчанию
+	tuned    bool         // взяты из подбора experiment
 
 	llm    rag.LLM
 	llmErr error
@@ -117,32 +112,25 @@ func setup() (*app, error) {
 	if err != nil {
 		return nil, err
 	}
-	model := env("EMBED_MODEL", defaultEmbedModel)
-	small := boolEnv("SMALL_TO_BIG", defaultSmallToBig)
-	cfg := retrieve.Config{Variant: experiment.VariantMain, Query: env("RETRIEVAL_QUERY", defaultQuery),
-		Hybrid: boolEnv("RETRIEVAL_HYBRID", defaultHybrid)}
-	if small {
-		cfg.Variant, cfg.Parent = experiment.VariantSmall, experiment.VariantMain
-	}
-	cfg.ID = experiment.ConfigID(model, cfg)
-	cfg.Title = retrievalTitle(cfg)
-
+	ollamaURL := env("OLLAMA_URL", "http://localhost:11434")
 	a := &app{
-		dataDir:   dataDir,
-		store:     st,
-		ollama:    embed.New(env("OLLAMA_URL", "http://localhost:11434"), durationEnv("OLLAMA_TIMEOUT", 5*time.Minute)),
-		variants:  experiment.Variants(model, small),
-		retrieval: cfg,
-		books:     books,
+		dataDir:  dataDir,
+		store:    st,
+		ollama:   embed.New(ollamaURL, durationEnv("OLLAMA_TIMEOUT", 5*time.Minute)),
+		reranker: rerank.NewOllama(ollamaURL, env("RERANK_MODEL", defaultReranker), time.Minute),
+		variants: experiment.Variants(),
+		books:    books,
 		fetcher: &book.Fetcher{
 			Mirror: env("GUTENBERG_MIRROR", "https://gutenberg.pglaf.org"),
 			Dir:    filepath.Join(dataDir, "sources"),
 			Pause:  2 * time.Second,
 			Client: &http.Client{Timeout: 2 * time.Minute},
 		},
-		params:       chunk.DefaultParams,
-		evalPath:     env("EVAL_FILE", "../eval/questions.json"),
-		controlsPath: env("RAG_EVAL_FILE", "../eval/rag.json"),
+		params:   chunk.DefaultParams,
+		evalPath: env("EVAL_FILE", "../eval/questions.json"),
+	}
+	if err := a.loadSettings(); err != nil {
+		return nil, err
 	}
 	m, provider, err := llm.ResolveModel(os.Getenv("RAG_MODEL"), os.Getenv)
 	a.llm = rag.LLM{Client: llm.New(durationEnv("LLM_TIMEOUT", 3*time.Minute)), Provider: provider, Model: m.ID,
@@ -151,18 +139,28 @@ func setup() (*app, error) {
 	return a, nil
 }
 
-func retrievalTitle(c retrieve.Config) string {
-	t := map[string]string{
-		retrieve.QueryRaw: "вопрос как есть", retrieve.QueryEnglish: "перевод на английский",
-		retrieve.QueryHyDE: "HyDE", retrieve.QueryFuse: "вопрос + перевод",
-	}[c.Query]
-	if c.Hybrid {
-		t += " + BM25"
+// loadSettings -- настройки по умолчанию: подобранные командой experiment,
+// поверх -- переменные окружения.
+func (a *app) loadSettings() error {
+	s := experiment.Defaults
+	rep, ok, err := experiment.Load(filepath.Join(a.dataDir, "experiments", "report.json"))
+	if err != nil {
+		log.Printf("отчёт подбора не прочитан, беру значения по умолчанию: %v", err)
+	} else if ok && rep.Chosen.Validate() == nil {
+		s, a.tuned = rep.Chosen, true
 	}
-	if c.Parent != "" {
-		t = "small-to-big · " + t
+	s.BaseK = intEnv("BASE_TOP_K", s.BaseK)
+	s.Query = env("RETRIEVAL_QUERY", s.Query)
+	s.KBefore = intEnv("TOP_K_BEFORE", s.KBefore)
+	s.KAfter = intEnv("TOP_K_AFTER", s.KAfter)
+	s.SimMin = floatEnv("SIM_MIN", s.SimMin)
+	s.RelMin = floatEnv("REL_MIN", s.RelMin)
+	s.Order = env("RERANK_ORDER", s.Order)
+	if err := s.Validate(); err != nil {
+		return fmt.Errorf("настройки поиска: %w", err)
 	}
-	return t
+	a.settings = s
+	return nil
 }
 
 func (a *app) indexer() *index.Indexer {
@@ -174,13 +172,18 @@ func (a *app) searcher() *search.Searcher {
 	return &search.Searcher{Store: a.store, Embedder: a.ollama, Variants: a.variants}
 }
 
+func (a *app) rewriter() *rag.Rewriter {
+	return &rag.Rewriter{LLM: a.llm, Path: filepath.Join(a.dataDir, "rewrites.json")}
+}
+
 func (a *app) agent(s *search.Searcher) *rag.Agent {
 	return &rag.Agent{
 		LLM:       a.llm,
-		Rewriter:  &rag.Rewriter{LLM: a.llm, Path: filepath.Join(a.dataDir, "rewrites.json")},
+		Rewriter:  a.rewriter(),
 		Retriever: &retrieve.Retriever{Searcher: s},
-		Config:    a.retrieval,
-		K:         intEnv("RAG_TOP_K", 5),
+		Variant:   experiment.VariantMain,
+		Reranker:  a.reranker,
+		Defaults:  a.settings,
 	}
 }
 
@@ -190,9 +193,8 @@ func serve(ctx context.Context) error {
 		return err
 	}
 	defer a.store.Close()
-	jobs, evalJobs := &index.Jobs{}, &index.Jobs{}
+	jobs := &index.Jobs{}
 	defer jobs.Stop()
-	defer evalJobs.Stop()
 	if a.llmErr != nil {
 		log.Printf("модель ответов недоступна: %v", a.llmErr)
 	}
@@ -205,10 +207,7 @@ func serve(ctx context.Context) error {
 			return err
 		},
 		EvalPath: a.evalPath, Params: a.params, StaticDir: env("STATIC_DIR", "./web"),
-		Agent: a.agent(s), LLMError: a.llmErr, EvalJobs: evalJobs,
-		ControlsPath:   a.controlsPath,
-		RagEvalPath:    filepath.Join(a.dataDir, "rag-eval.json"),
-		ExperimentPath: filepath.Join(a.dataDir, "experiments", "report.json"),
+		Agent: a.agent(s), LLMError: a.llmErr, Tuned: a.tuned,
 	})
 	addr := ":" + env("PORT", "8080")
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -218,8 +217,9 @@ func serve(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	log.Printf("слушаю %s; Ollama %s; книг %d; поиск: %s (%s); модель ответов: %s",
-		addr, a.ollama.URL, len(a.books), a.retrieval.ID, a.retrieval.Title, a.llm.Model)
+	st := a.settings
+	log.Printf("слушаю %s; книг %d; эмбеддинги %s, реранкер %s; top-K до %d, косинус ≥ %.2f, реранкер ≥ %.2f, top-K после %d; ответы: %s",
+		addr, len(a.books), experiment.Model, a.reranker.Model, st.KBefore, st.SimMin, st.RelMin, st.KAfter, a.llm.Model)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -262,13 +262,18 @@ func askCmd(ctx context.Context, args []string) error {
 	if a.llmErr != nil {
 		return a.llmErr
 	}
-	res := a.agent(a.searcher()).Ask(ctx, question)
+	res := a.agent(a.searcher()).Ask(ctx, question, a.settings)
 	fmt.Printf("Вопрос: %s\nМодель: %s\n", question, res.Model)
-	fmt.Printf("\n── Без RAG (%.1f с)\n%s\n", res.NoRAG.Ms/1000, orError(res.NoRAG))
-	fmt.Printf("\n── С RAG (%.1f с; поиск: %s)\n", res.RAG.Ms/1000, strings.Join(res.RAG.Queries, " | "))
-	fmt.Println(orError(res.RAG.Answer))
-	for _, s := range res.RAG.Sources {
-		fmt.Printf("  [%d] %.3f %s · %s\n", s.N, s.Score, s.BookTitle, s.Section)
+	fmt.Printf("\n── Базовый RAG (%.1f с)\n%s\n", res.Base.Ms/1000, orError(res.Base.Answer))
+	for _, s := range res.Base.Sources {
+		fmt.Printf("  [%d] cos %.3f  %s · %s\n", s.N, s.Cosine, s.BookTitle, s.Section)
+	}
+	f := res.Improved.Funnel
+	fmt.Printf("\n── RAG с фильтром и реранкером (%.1f с)\n%s\n", res.Improved.Ms/1000, orError(res.Improved.Answer))
+	fmt.Printf("  поиск: %s\n  реранкер: %s\n  %d кандидатов → %d прошли порог косинуса → %d прошли реранкер → %d в ответе\n",
+		shorten(res.Improved.SearchQuery, 120), res.Improved.RerankQuery, f.Total, f.PassedSim, f.PassedRel, f.Kept)
+	for _, s := range res.Improved.Sources {
+		fmt.Printf("  [%d] реранкер %.2f, cos %.3f  %s · %s\n", s.N, *s.Rel, s.Cosine, s.BookTitle, s.Section)
 	}
 	return nil
 }
@@ -278,6 +283,13 @@ func orError(a rag.Answer) string {
 		return "ошибка: " + a.Error
 	}
 	return a.Text
+}
+
+func shorten(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 func searchCmd(ctx context.Context, args []string) error {
@@ -295,79 +307,16 @@ func searchCmd(ctx context.Context, args []string) error {
 		return err
 	}
 	defer a.store.Close()
-	ag := a.agent(a.searcher())
-	var rw retrieve.Rewrite
-	if a.retrieval.NeedsRewrite() {
-		if a.llmErr != nil {
-			return a.llmErr
-		}
-		if rw, _, err = ag.Rewriter.Rewrite(ctx, query); err != nil {
-			return err
-		}
-	}
-	res, err := ag.Retriever.Retrieve(ctx, a.retrieval, query, rw, "", *k)
+	r := &retrieve.Retriever{Searcher: a.searcher()}
+	res, err := r.Retrieve(ctx, retrieve.Config{Variant: experiment.VariantMain, Query: retrieve.QueryRaw}, query,
+		retrieve.Rewrite{}, "", *k)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Вопрос: %s\nПоиск (%s): %s\n\n", query, a.retrieval.Title, strings.Join(res.Queries, " | "))
+	fmt.Printf("Вопрос: %s\n\n", query)
 	for _, h := range res.Hits {
-		fmt.Printf("  %d. %.3f  %s · %s\n     %s\n", h.Rank, h.Score, h.BookTitle, h.Section, h.Snippet)
+		fmt.Printf("  %d. cos %.3f  %s · %s\n     %s\n", h.Rank, h.Cosine, h.BookTitle, h.Section, h.Snippet)
 	}
-	return nil
-}
-
-func ragEvalCmd(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("rag-eval", flag.ContinueOnError)
-	force := fs.Bool("force", false, "пересчитать и уже оценённые вопросы")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	a, err := setup()
-	if err != nil {
-		return err
-	}
-	defer a.store.Close()
-	if a.llmErr != nil {
-		return a.llmErr
-	}
-	s := a.searcher()
-	if err := s.Refresh(ctx); err != nil {
-		return err
-	}
-	controls, err := rag.LoadControls(a.controlsPath)
-	if err != nil {
-		return err
-	}
-	books := map[string]*book.Book{}
-	for id, info := range s.Books() {
-		books[id] = info.Book
-	}
-	controls = rag.ValidateControls(controls, books)
-	for _, c := range controls {
-		if !c.Valid {
-			log.Printf("[rag-eval] %s пропущен: %s", c.ID, c.Problem)
-		}
-	}
-	rep, err := a.agent(s).Evaluate(ctx, controls, filepath.Join(a.dataDir, "rag-eval.json"), *force,
-		func(i int, row rag.EvalRow, skipped bool) {
-			if skipped {
-				log.Printf("[rag-eval] %d/%d %s: уже оценён", i+1, len(controls), row.Control.ID)
-				return
-			}
-			src := "—"
-			if row.SourcesHit != nil {
-				src = map[bool]string{true: "да", false: "нет"}[*row.SourcesHit]
-			}
-			log.Printf("[rag-eval] %d/%d %s: без RAG — %s, с RAG — %s, источники в контексте — %s %s",
-				i+1, len(controls), row.Control.ID, row.NoRAG.Verdict, row.RAG.Verdict, src, row.JudgeError)
-		})
-	if err != nil {
-		return err
-	}
-	log.Printf("[rag-eval] модель %s, поиск %s", rep.Model, rep.Config)
-	log.Printf("[rag-eval] без RAG: верно %d, частично %d, неверно %d", rep.NoRAG.Correct, rep.NoRAG.Partial, rep.NoRAG.Wrong)
-	log.Printf("[rag-eval] с RAG:   верно %d, частично %d, неверно %d", rep.RAG.Correct, rep.RAG.Partial, rep.RAG.Wrong)
-	log.Printf("[rag-eval] нужные источники в контексте: %d из %d", rep.SourcesHit, rep.WithSource)
 	return nil
 }
 
@@ -377,19 +326,16 @@ func experimentCmd(ctx context.Context) error {
 		return err
 	}
 	defer a.store.Close()
+	if a.llmErr != nil {
+		return a.llmErr
+	}
 	questions, err := compare.Load(a.evalPath)
 	if err != nil {
 		return err
 	}
-	var rw *rag.Rewriter
-	if a.llmErr == nil {
-		rw = &rag.Rewriter{LLM: a.llm, Path: filepath.Join(a.dataDir, "rewrites.json")}
-	} else {
-		log.Printf("[experiment] без переписывания вопросов: %v", a.llmErr)
-	}
-	models := strings.Split(env("EXPERIMENT_MODELS", "bge-m3,qwen3-embedding:0.6b,qwen3-embedding:4b"), ",")
-	r := &experiment.Runner{Dir: filepath.Join(a.dataDir, "experiments"), Ollama: a.ollama, Fetcher: a.fetcher,
-		Books: a.books, Params: a.params, Models: models, Rewriter: rw, Log: log.Printf}
+	r := &experiment.Runner{Dir: filepath.Join(a.dataDir, "experiments"),
+		Retriever: &retrieve.Retriever{Searcher: a.searcher()}, Reranker: a.reranker, Rewriter: a.rewriter(),
+		Log: log.Printf}
 	_, err = r.Run(ctx, questions)
 	return err
 }
@@ -442,15 +388,15 @@ func env(key, def string) string {
 	return def
 }
 
-func boolEnv(key string, def bool) bool {
-	if v, err := strconv.ParseBool(os.Getenv(key)); err == nil {
+func intEnv(key string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v > 0 {
 		return v
 	}
 	return def
 }
 
-func intEnv(key string, def int) int {
-	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v > 0 {
+func floatEnv(key string, def float64) float64 {
+	if v, err := strconv.ParseFloat(os.Getenv(key), 64); err == nil {
 		return v
 	}
 	return def

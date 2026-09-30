@@ -28,6 +28,9 @@ type Question struct {
 	Problem string `json:"problem,omitempty"`
 }
 
+// OffTopic -- вопрос, ответа на который в книгах нет.
+func (q Question) OffTopic() bool { return q.Book == "" }
+
 // Load читает файл вопросов.
 func Load(path string) ([]Question, error) {
 	raw, err := os.ReadFile(path)
@@ -48,6 +51,8 @@ func Validate(qs []Question, books map[string]*book.Book) []Question {
 		q.Valid, q.Problem = true, ""
 		b, ok := books[q.Book]
 		switch {
+		case q.Q != "" && q.OffTopic():
+			// вопрос вне книг: проверять нечего, хороший поиск вернёт пустой контекст
 		case q.Q == "" || len(q.Chapters) == 0 || len(q.Evidence) == 0:
 			q.Valid, q.Problem = false, "нужны q, chapters и evidence"
 		case !ok:

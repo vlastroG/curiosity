@@ -20,7 +20,8 @@ import {
 
 test('маршруты туда и обратно', () => {
   assert.deepEqual(parseRoute(''), { view: 'ask', params: {} });
-  assert.deepEqual(parseRoute('#/quality'), { view: 'quality', params: {} });
+  assert.deepEqual(parseRoute('#/index'), { view: 'index', params: {} });
+  assert.equal(parseRoute('#/quality').view, 'ask');
   const h = readHash('tom', 3, 'structure-tom-0012', 'structure');
   assert.equal(h, '#/read/tom/3?c=structure-tom-0012&v=structure');
   assert.deepEqual(parseRoute(h), { view: 'read', book: 'tom', section: 3, params: { c: 'structure-tom-0012', v: 'structure' } });
@@ -128,4 +129,23 @@ test('сноски в ответе', () => {
 test('подпись режима поиска', () => {
   assert.equal(queryModeTitle({ query: 'en', hybrid: true }), 'перевод на английский · + BM25');
   assert.equal(queryModeTitle({ query: 'raw', parent: 'structure' }), 'small-to-big · вопрос как есть');
+});
+
+import { funnelLine, sameSettings, clampSettings } from './format.js';
+
+test('строка воронки', () => {
+  assert.equal(
+    funnelLine({ total: 20, passedSim: 14, passedRel: 5, kept: 3 }),
+    '20 кандидатов → 14 прошли порог косинуса → 5 одобрил реранкер → 3 в ответе'
+  );
+  assert.equal(funnelLine({ total: 20, passedSim: 20, passedRel: 0, kept: 0 }), '20 кандидатов → 0 одобрил реранкер → 0 в ответе');
+});
+
+test('настройки: сравнение и границы', () => {
+  const a = { baseK: 5, query: 'hyde', kBefore: 20, simMin: 0.3, relMin: 0.5, kAfter: 5 };
+  assert.ok(sameSettings(a, { ...a, simMin: '0.3' }));
+  assert.ok(!sameSettings(a, { ...a, relMin: 0.6 }));
+  assert.deepEqual(clampSettings({ baseK: 0, query: 'x', kBefore: 99, simMin: -1, relMin: 'abc', kAfter: 3.6 }), {
+    baseK: 1, query: 'hyde', kBefore: 50, simMin: 0, relMin: 0.5, kAfter: 4, order: 'cosine',
+  });
 });
