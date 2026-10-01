@@ -62,7 +62,7 @@ func setup(t *testing.T) *fixture {
 		Retriever: &retrieve.Retriever{Searcher: searcher},
 		Variant:   "structure",
 		Reranker:  rerank.NewOllama(o.URL, "reranker", 10*time.Second),
-		Defaults: rag.Settings{BaseK: 3, Query: retrieve.QueryHyDE,
+		Defaults: rag.Settings{Query: retrieve.QueryHyDE,
 			Params: rerank.Params{KBefore: 10, SimMin: 0, RelMin: 0.5, KAfter: 3, Order: rerank.OrderRerank}},
 	}
 	h := httpapi.New(httpapi.Config{
@@ -314,7 +314,7 @@ func (fakeLLM) Chat(_ context.Context, _ llm.Provider, req llm.Request) (llm.Res
 	return llm.Response{Text: "По памяти: кажется, забор."}, nil
 }
 
-func TestAskBothModes(t *testing.T) {
+func TestAsk(t *testing.T) {
 	f := setup(t)
 	var e map[string]string
 	if code := f.post(t, "/api/ask", `{"question":"x"}`, &e); code != http.StatusConflict {
@@ -324,7 +324,7 @@ func TestAskBothModes(t *testing.T) {
 	if code := f.post(t, "/api/ask", `{"question":"  "}`, nil); code != http.StatusBadRequest {
 		t.Errorf("пустой вопрос: %d", code)
 	}
-	if code := f.post(t, "/api/ask", `{"question":"q","settings":{"baseK":5,"query":"hyde","kBefore":99,"kAfter":5,"order":"rerank"}}`, &e); code != http.StatusBadRequest ||
+	if code := f.post(t, "/api/ask", `{"question":"q","settings":{"query":"hyde","kBefore":99,"kAfter":5,"order":"rerank"}}`, &e); code != http.StatusBadRequest ||
 		!strings.Contains(e["error"], "top-K до") {
 		t.Errorf("настройки вне диапазона: %d %v", code, e)
 	}
@@ -336,11 +336,8 @@ func TestAskBothModes(t *testing.T) {
 		t.Fatalf("ask: %d", code)
 	}
 	r := resp.Result
-	if !strings.Contains(r.Base.Text, "[1]") || len(r.Base.Sources) != 3 || r.Base.Sources[0].Rel != nil {
-		t.Fatalf("базовый: %+v", r.Base)
-	}
-	im := r.Improved
-	if im.Error != "" || im.Rewrite.HyDE == "" || im.SearchQuery != im.Rewrite.HyDE || im.RerankQuery != im.Rewrite.EN || !im.Rewritten {
+	im := r
+	if im.Error != "" || !strings.Contains(im.Text, "[1]") || im.Rewrite.HyDE == "" || im.SearchQuery != im.Rewrite.HyDE || im.RerankQuery != im.Rewrite.EN || !im.Rewritten {
 		t.Fatalf("улучшенный: %+v", im)
 	}
 	fn := im.Funnel
@@ -359,12 +356,12 @@ func TestAskBothModes(t *testing.T) {
 	}
 
 	// свои настройки: порог реранкера 1 -- ни один отрывок не проходит
-	body := `{"question":"whitewash fence brush","settings":{"baseK":2,"query":"raw","kBefore":5,"simMin":0,"relMin":1,"kAfter":3,"order":"cosine"}}`
+	body := `{"question":"whitewash fence brush","settings":{"query":"raw","kBefore":5,"simMin":0,"relMin":1,"kAfter":3,"order":"cosine"}}`
 	if code := f.post(t, "/api/ask", body, &resp); code != 200 {
 		t.Fatalf("ask со своими настройками: %d", code)
 	}
-	if len(resp.Result.Base.Sources) != 2 || resp.Result.Improved.Funnel.Kept != 0 || resp.Result.Improved.Rewrite.EN != "" {
-		t.Fatalf("свои настройки не применились: %+v", resp.Result.Improved.Funnel)
+	if resp.Result.Funnel.Total != 5 || resp.Result.Funnel.Kept != 0 || resp.Result.Rewrite.EN != "" {
+		t.Fatalf("свои настройки не применились: %+v", resp.Result.Funnel)
 	}
 	for _, path := range []string{"/api/controls", "/api/rag-eval", "/api/experiment", "/api/compare"} {
 		if code := f.get(t, path, nil); code != http.StatusNotFound {

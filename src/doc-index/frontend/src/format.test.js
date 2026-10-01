@@ -142,10 +142,10 @@ test('строка воронки', () => {
 });
 
 test('настройки: сравнение и границы', () => {
-  const a = { baseK: 5, query: 'hyde', kBefore: 20, simMin: 0.3, relMin: 0.5, kAfter: 5 };
+  const a = { query: 'hyde', kBefore: 20, simMin: 0.3, relMin: 0.5, kAfter: 5 };
   assert.ok(sameSettings(a, { ...a, simMin: '0.3' }));
   assert.ok(!sameSettings(a, { ...a, relMin: 0.6 }));
-  assert.deepEqual(clampSettings({ baseK: 0, query: 'x', kBefore: 99, simMin: -1, relMin: 'abc', kAfter: 3.6 }), {
-    baseK: 1, query: 'hyde', kBefore: 50, simMin: 0, relMin: 0.5, kAfter: 4, order: 'cosine',
+  assert.deepEqual(clampSettings({ query: 'x', kBefore: 99, simMin: -1, relMin: 'abc', kAfter: 3.6 }), {
+    query: 'hyde', kBefore: 50, simMin: 0, relMin: 0.5, kAfter: 4, order: 'cosine',
   });
 });

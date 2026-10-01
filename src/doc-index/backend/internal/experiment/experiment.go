@@ -6,11 +6,10 @@
 // без новых вызовов моделей: это просто разные правила отбора по уже
 // посчитанным числам.
 //
-//	базовый                      вопрос как есть, top-5 по косинусу
-//	+ rewrite                    HyDE, top-5 по косинусу
-//	+ rewrite + порог косинуса   HyDE, top-K до, косинус ≥ SIM_MIN, top-5
-//	+ rewrite + реранкер         HyDE, top-20, реранкер, top-5
-//	+ rewrite + реранкер + порог HyDE, top-K до, SIM_MIN, реранкер, REL_MIN, top-K после
+//   - rewrite                    HyDE, top-5 по косинусу
+//   - rewrite + порог косинуса   HyDE, top-K до, косинус ≥ SIM_MIN, top-5
+//   - rewrite + реранкер         HyDE, top-20, реранкер, top-5
+//   - rewrite + реранкер + порог HyDE, top-K до, SIM_MIN, реранкер, REL_MIN, top-K после
 package experiment
 
 import (
@@ -45,7 +44,7 @@ func Variants() []index.Variant {
 }
 
 // Defaults -- настройки, если подбора ещё не было.
-var Defaults = rag.Settings{BaseK: 5, Query: retrieve.QueryHyDE,
+var Defaults = rag.Settings{Query: retrieve.QueryHyDE,
 	Params: rerank.Params{KBefore: 20, SimMin: 0.3, RelMin: 0.05, KAfter: 5, Order: rerank.OrderCosine}}
 
 // maxCandidates -- сколько кандидатов считается на вопрос (верхняя граница перебора top-K до).
@@ -193,7 +192,7 @@ func (r *Runner) Run(ctx context.Context, questions []compare.Question) (Report,
 		}
 	}
 	chosen := choose(rep.Sweep, rep.Questions, rep.OffTopic)
-	rep.Chosen = rag.Settings{BaseK: 5, Query: retrieve.QueryHyDE, Params: chosen}
+	rep.Chosen = rag.Settings{Query: retrieve.QueryHyDE, Params: chosen}
 
 	top := func(hits []search.Hit, k int) []search.Hit { return hits[:min(k, len(hits))] }
 	var relMs float64
@@ -201,9 +200,6 @@ func (r *Runner) Run(ctx context.Context, questions []compare.Question) (Report,
 		relMs += d.relMs * float64(chosen.KBefore) / float64(max(1, len(d.hyde)))
 	}
 	rep.Modes = []Mode{
-		{ID: "base", Title: "базовый: вопрос как есть, top-5", Query: retrieve.QueryRaw,
-			Params:  rerank.Params{KBefore: 5, KAfter: 5},
-			Metrics: evaluate(data, func(d prepared) []search.Hit { return top(d.raw, 5) })},
 		{ID: "rewrite", Title: "+ rewrite (HyDE), top-5", Query: retrieve.QueryHyDE,
 			Params:  rerank.Params{KBefore: 5, KAfter: 5},
 			Metrics: evaluate(data, func(d prepared) []search.Hit { return top(d.hyde, 5) })},

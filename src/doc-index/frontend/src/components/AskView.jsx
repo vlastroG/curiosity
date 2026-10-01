@@ -33,7 +33,7 @@ function save(v) {
   }
 }
 
-// AskView -- вопрос и два ответа по отрывкам из книг: базовый RAG и RAG
+// AskView -- вопрос и ответ по отрывкам из книг: RAG
 // с переписыванием вопроса, порогами и реранкером.
 export default function AskView({ route, status, questions, indexReady }) {
   const q = route.params.q || '';
@@ -143,27 +143,13 @@ export default function AskView({ route, status, questions, indexReady }) {
       {error && <div className="error">{error}</div>}
 
       {(busy || result) && (
-        <div className="answers">
-          <section className="answer-col">
-            <header className="answer-head">
-              <div className="answer-title">Базовый RAG</div>
-              <div className="answer-sub">
-                вопрос как есть → top-{result?.settings.baseK ?? current?.baseK} по косинусу → модель
-              </div>
-            </header>
-            {busy && !result && <Waiting text="Ищу отрывки и читаю их…" />}
-            {result && <Base r={result.base} books={books} />}
-          </section>
-
-          <section className="answer-col rag">
-            <header className="answer-head">
-              <div className="answer-title">RAG с фильтром и реранкером</div>
-              <div className="answer-sub">переписанный вопрос → порог косинуса → реранкер → порог → модель</div>
-            </header>
-            {busy && !result && <Waiting text="Переписываю вопрос, отбираю отрывки…" />}
-            {result && <Improved r={result.improved} settings={result.settings} books={books} />}
-          </section>
-        </div>
+        <section className="answer-col rag single">
+          <header className="answer-head">
+            <div className="answer-sub">переписанный вопрос → порог косинуса → реранкер → порог → модель</div>
+          </header>
+          {busy && !result && <Waiting text="Переписываю вопрос, отбираю отрывки…" />}
+          {result && <Improved r={result} settings={result.settings} books={books} />}
+        </section>
       )}
       {result && <div className="timing">модель ответов: {result.model}</div>}
     </div>
@@ -197,7 +183,7 @@ function Settings({ s, rag, onChange, onReset, custom }) {
     <section className="settings">
       <div className="settings-row">
         <div className="settings-group">
-          <div className="settings-title">С фильтром и реранкером</div>
+          <div className="settings-title">Поиск</div>
           <label className="setting" title="Что превращать в вектор для поиска">
             <span className="setting-label">запрос для поиска</span>
             <select value={s.query} onChange={(e) => onChange({ query: e.target.value })}>
@@ -222,10 +208,6 @@ function Settings({ s, rag, onChange, onReset, custom }) {
             </select>
             <span className="setting-hint">реранкер только отсекает или ещё и сортирует</span>
           </label>
-        </div>
-        <div className="settings-group">
-          <div className="settings-title">Базовый</div>
-          {num('baseK', 'top-K', 'сколько отрывков уходит в модель, без проверки', 1, 1, 10)}
         </div>
         <div className="settings-group readonly">
           <div className="settings-title">Модели</div>
@@ -297,29 +279,6 @@ function AnswerText({ answer, onCite, lit }) {
         </p>
       ))}
     </div>
-  );
-}
-
-function Base({ r, books }) {
-  const d = useDetails();
-  return (
-    <>
-      <AnswerText answer={r} onCite={d.cite} lit={d.lit} />
-      <div className="summary">
-        {r.sources?.length || 0} отрывков · {(r.ms / 1000).toFixed(1)} с
-      </div>
-      <details className="how" open={d.open} onToggle={(e) => d.setOpen(e.target.open)}>
-        <summary>Как искали</summary>
-        <div ref={d.ref}>
-          <Steps steps={[['поиск', r.searchMs], ['всего', r.ms]]} />
-          <ol className="sources">
-            {(r.sources || []).map((s) => (
-              <Source key={s.chunkId} s={s} lit={d.lit === s.n} books={books} />
-            ))}
-          </ol>
-        </div>
-      </details>
-    </>
   );
 }
 

@@ -236,7 +236,7 @@ export function funnelLine(f) {
 // sameSettings -- настройки совпадают (для кнопки «спросить снова»).
 export function sameSettings(a, b) {
   if (!a || !b) return false;
-  return ['baseK', 'query', 'kBefore', 'simMin', 'relMin', 'kAfter', 'order'].every((k) => Number(a[k]) === Number(b[k]) || a[k] === b[k]);
+  return ['query', 'kBefore', 'simMin', 'relMin', 'kAfter', 'order'].every((k) => Number(a[k]) === Number(b[k]) || a[k] === b[k]);
 }
 
 // clampSettings -- числа в допустимых диапазонах, как проверяет сервер.
@@ -246,7 +246,6 @@ export function clampSettings(s) {
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
   };
   return {
-    baseK: Math.round(c(s.baseK, 1, 10, 5)),
     query: ['hyde', 'en', 'raw'].includes(s.query) ? s.query : 'hyde',
     kBefore: Math.round(c(s.kBefore, 1, 50, 20)),
     simMin: c(s.simMin, 0, 1, 0),

@@ -142,7 +142,7 @@ func TestPromptWithoutSources(t *testing.T) {
 }
 
 func TestSettingsValidate(t *testing.T) {
-	ok := Settings{BaseK: 5, Query: retrieve.QueryHyDE}
+	ok := Settings{Query: retrieve.QueryHyDE}
 	ok.KBefore, ok.KAfter, ok.RelMin, ok.Order = 20, 5, 0.5, rerank.OrderCosine
 	if ok.Validate() != nil {
 		t.Fatal("допустимые настройки")
@@ -153,8 +153,8 @@ func TestSettingsValidate(t *testing.T) {
 		t.Error("режим запроса")
 	}
 	bad = ok
-	bad.BaseK = 0
+	bad.KAfter = 0
 	if bad.Validate() == nil {
-		t.Error("top-K базового режима")
+		t.Error("top-K после")
 	}
 }

@@ -1676,3 +1676,7 @@ td {
 .pill.muted {
   color: var(--muted);
 }
+
+.answer-col.single {
+  max-width: 900px;
+}

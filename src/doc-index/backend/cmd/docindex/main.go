@@ -1,10 +1,9 @@
 // Command docindex -- Twain Expert: вопросы о книгах Марка Твена, ответ по
-// найденным отрывкам в двух вариантах -- базовый RAG и RAG с переписыванием
-// вопроса, фильтром и реранкером.
+// найденным отрывкам (RAG с переписыванием вопроса, фильтром и реранкером).
 //
 //	docindex serve              веб-интерфейс и API (по умолчанию)
 //	docindex index [--rebuild]  построить индекс: книги → чанки → эмбеддинги → SQLite
-//	docindex ask "вопрос"       оба ответа из терминала
+//	docindex ask "вопрос"       ответ из терминала
 //	docindex search "вопрос"    найденные отрывки
 //	docindex experiment         подбор порогов и top-K, сравнение режимов
 //	docindex stats              что лежит в индексе
@@ -149,7 +148,6 @@ func (a *app) loadSettings() error {
 	} else if ok && rep.Chosen.Validate() == nil {
 		s, a.tuned = rep.Chosen, true
 	}
-	s.BaseK = intEnv("BASE_TOP_K", s.BaseK)
 	s.Query = env("RETRIEVAL_QUERY", s.Query)
 	s.KBefore = intEnv("TOP_K_BEFORE", s.KBefore)
 	s.KAfter = intEnv("TOP_K_AFTER", s.KAfter)
@@ -264,15 +262,11 @@ func askCmd(ctx context.Context, args []string) error {
 	}
 	res := a.agent(a.searcher()).Ask(ctx, question, a.settings)
 	fmt.Printf("Вопрос: %s\nМодель: %s\n", question, res.Model)
-	fmt.Printf("\n── Базовый RAG (%.1f с)\n%s\n", res.Base.Ms/1000, orError(res.Base.Answer))
-	for _, s := range res.Base.Sources {
-		fmt.Printf("  [%d] cos %.3f  %s · %s\n", s.N, s.Cosine, s.BookTitle, s.Section)
-	}
-	f := res.Improved.Funnel
-	fmt.Printf("\n── RAG с фильтром и реранкером (%.1f с)\n%s\n", res.Improved.Ms/1000, orError(res.Improved.Answer))
+	f := res.Funnel
+	fmt.Printf("\n%s\n\n(%.1f с)\n", orError(res.Answer), res.Ms/1000)
 	fmt.Printf("  поиск: %s\n  реранкер: %s\n  %d кандидатов → %d прошли порог косинуса → %d прошли реранкер → %d в ответе\n",
-		shorten(res.Improved.SearchQuery, 120), res.Improved.RerankQuery, f.Total, f.PassedSim, f.PassedRel, f.Kept)
-	for _, s := range res.Improved.Sources {
+		shorten(res.SearchQuery, 120), res.RerankQuery, f.Total, f.PassedSim, f.PassedRel, f.Kept)
+	for _, s := range res.Sources {
 		fmt.Printf("  [%d] реранкер %.2f, cos %.3f  %s · %s\n", s.N, *s.Rel, s.Cosine, s.BookTitle, s.Section)
 	}
 	return nil
