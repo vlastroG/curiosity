@@ -1,4 +1,5 @@
 import { fmtNum, plural, routeHash } from '../format.js';
+import useHeightVar from '../useHeightVar.js';
 
 const TABS = [
   { view: 'chat', title: 'Чат' },
@@ -22,9 +23,10 @@ export default function Header({ route, status, error }) {
   const chunks = ready.reduce((s, v) => s + v.chunks, 0);
   const gpu = gpuState(status);
   const main = status?.variants?.[0]?.model || '…';
+  const ref = useHeightVar('--header-h');
 
   return (
-    <header className="header">
+    <header className="header" ref={ref}>
       <div className="header-row">
         <a className="brand" href={routeHash('chat')}>
           <span className="brand-mark" aria-hidden="true">

@@ -4,6 +4,7 @@ import { fmtWhen, plural, routeHash } from '../format.js';
 import ChatSettings from './ChatSettings.jsx';
 import Reply, { Waiting } from './Reply.jsx';
 import TaskMemory from './TaskMemory.jsx';
+import useHeightVar from '../useHeightVar.js';
 
 const STARTERS = [
   'Как Твен понимает совесть и мораль — на примере Гека и Джима?',
@@ -189,6 +190,7 @@ function Dialog({ chat, rag, books, pending, freshSeq, onSend, onRename, onDelet
   const [text, setText] = useState('');
   const [renaming, setRenaming] = useState(null);
   const end = useRef(null);
+  const top = useHeightVar('--chat-top-h');
   const count = chat.messages.length;
 
   useEffect(() => {
@@ -210,33 +212,35 @@ function Dialog({ chat, rag, books, pending, freshSeq, onSend, onRename, onDelet
 
   return (
     <>
-      <header className="chat-head">
-        {renaming !== null ? (
-          <form className="chat-rename" onSubmit={rename}>
-            <input value={renaming} onChange={(e) => setRenaming(e.target.value)} maxLength={120} autoFocus
-              placeholder="пусто — название по теме" aria-label="Название чата" />
-            <button className="btn small primary" type="submit">
-              Сохранить
-            </button>
-            <button className="link" type="button" onClick={() => setRenaming(null)}>
-              Отмена
-            </button>
-          </form>
-        ) : (
-          <>
-            <h2 className="chat-title">{chat.title}</h2>
-            <button className="link" onClick={() => setRenaming(chat.named ? chat.title : '')}>
-              переименовать
-            </button>
-            <button className="link danger" onClick={onDelete}>
-              удалить чат
-            </button>
-          </>
-        )}
-      </header>
+      <div className="chat-top" ref={top}>
+        <header className="chat-head">
+          {renaming !== null ? (
+            <form className="chat-rename" onSubmit={rename}>
+              <input value={renaming} onChange={(e) => setRenaming(e.target.value)} maxLength={120} autoFocus
+                placeholder="пусто — название по теме" aria-label="Название чата" />
+              <button className="btn small primary" type="submit">
+                Сохранить
+              </button>
+              <button className="link" type="button" onClick={() => setRenaming(null)}>
+                Отмена
+              </button>
+            </form>
+          ) : (
+            <>
+              <h2 className="chat-title">{chat.title}</h2>
+              <button className="link" onClick={() => setRenaming(chat.named ? chat.title : '')}>
+                переименовать
+              </button>
+              <button className="link danger" onClick={onDelete}>
+                удалить чат
+              </button>
+            </>
+          )}
+        </header>
 
-      <ChatSettings chat={chat} rag={rag} onSave={onSettings} />
-      <TaskMemory chat={chat} freshSeq={freshSeq} onSave={onState} />
+        <ChatSettings chat={chat} rag={rag} onSave={onSettings} />
+        <TaskMemory chat={chat} freshSeq={freshSeq} onSave={onState} />
+      </div>
 
       <div className="messages">
         {count === 0 && !pending && (

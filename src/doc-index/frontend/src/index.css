@@ -2169,3 +2169,60 @@ td {
     margin-left: 0;
   }
 }
+
+/* верх чата -- название, настройки, память -- всегда виден под шапкой */
+
+html {
+  scroll-padding-top: calc(var(--header-h, 0px) + var(--chat-top-h, 0px) + 12px);
+  scroll-padding-bottom: 96px;
+}
+
+.chat-top {
+  position: sticky;
+  top: var(--header-h, 0px);
+  z-index: 5;
+  background: var(--bg);
+  margin-top: -20px;
+  padding-top: 14px;
+  border-bottom: 1px solid var(--border);
+  /* под блоком всегда остаётся место для диалога и поля ввода */
+  max-height: calc(100vh - var(--header-h, 0px) - 160px);
+  overflow-y: auto;
+}
+
+.chat-top .settings,
+.chat-top .memory {
+  margin-bottom: 10px;
+}
+
+/* раскрытые панели не закрывают весь диалог: прокручиваются внутри */
+.chat-top .memory-body,
+.chat-top .chat-settings[open] > .settings-row {
+  max-height: 38vh;
+  overflow-y: auto;
+}
+
+@media (min-width: 901px) {
+  .chat-list {
+    top: calc(var(--header-h, 0px) + 12px);
+    max-height: calc(100vh - var(--header-h, 0px) - 24px);
+  }
+}
+
+@media (max-width: 900px) {
+  /* шапка здесь не липкая */
+  html {
+    scroll-padding-top: calc(var(--chat-top-h, 0px) + 12px);
+  }
+  .chat-top {
+    top: 0;
+    max-height: calc(100vh - 160px);
+  }
+}
+
+@media (max-width: 760px) {
+  .chat-top .memory-body,
+  .chat-top .chat-settings[open] > .settings-row {
+    max-height: 30vh;
+  }
+}
