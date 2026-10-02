@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"doc-index/internal/book"
+	"doc-index/internal/chat"
 	"doc-index/internal/chunk"
 	"doc-index/internal/compare"
 	"doc-index/internal/embed"
@@ -45,10 +46,13 @@ type Config struct {
 	Params    chunk.Params
 	StaticDir string
 
-	// RAG
-	Agent    *rag.Agent
-	LLMError error // модель ответов недоступна (нет ключа и т. п.)
-	Tuned    bool  // настройки по умолчанию подобраны командой experiment
+	// RAG и чат
+	Agent        *rag.Agent
+	Chats        *chat.Service
+	ChatDefaults chat.Settings // настройки нового чата
+	LLMBudget    int           // бюджет вывода модели ответов
+	LLMError     error         // модель ответов недоступна (нет ключа и т. п.)
+	Tuned        bool          // настройки поиска подобраны командой experiment
 }
 
 // API -- обработчики.
@@ -76,7 +80,13 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/chunks/{variant}/{id}", a.chunk)
 	mux.HandleFunc("POST /api/index", a.startIndex)
 	mux.HandleFunc("GET /api/index/events", a.indexEvents)
-	mux.HandleFunc("POST /api/ask", a.ask)
+	mux.HandleFunc("GET /api/chats", a.listChats)
+	mux.HandleFunc("POST /api/chats", a.createChat)
+	mux.HandleFunc("GET /api/chats/{id}", a.getChat)
+	mux.HandleFunc("PATCH /api/chats/{id}", a.patchChat)
+	mux.HandleFunc("DELETE /api/chats/{id}", a.deleteChat)
+	mux.HandleFunc("PUT /api/chats/{id}/state", a.putState)
+	mux.HandleFunc("POST /api/chats/{id}/messages", a.sendMessage)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -164,7 +174,8 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 	if a.Agent != nil {
 		ragInfo["model"] = a.Agent.LLM.Model
 		ragInfo["reranker"] = a.Agent.Reranker.Name()
-		ragInfo["defaults"] = a.Agent.Defaults
+		ragInfo["defaults"] = a.ChatDefaults
+		ragInfo["budget"] = a.LLMBudget
 		ragInfo["tuned"] = a.Tuned
 	}
 	if a.LLMError != nil {
@@ -456,61 +467,6 @@ func streamJob(w http.ResponseWriter, r *http.Request, jobs *index.Jobs) {
 			return
 		}
 	}
-}
-
-// ask -- ответ на вопрос двумя вариантами RAG. Настройки -- из запроса,
-// недостающие берутся по умолчанию.
-func (a *API) ask(w http.ResponseWriter, r *http.Request) {
-	if a.Agent == nil || a.LLMError != nil {
-		msg := "модель ответов не настроена"
-		if a.LLMError != nil {
-			msg = a.LLMError.Error()
-		}
-		writeError(w, http.StatusServiceUnavailable, errors.New(msg))
-		return
-	}
-	req := struct {
-		Question string        `json:"question"`
-		Settings *rag.Settings `json:"settings"`
-	}{}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, errors.New("неверный запрос"))
-		return
-	}
-	q := strings.TrimSpace(req.Question)
-	switch {
-	case q == "":
-		writeError(w, http.StatusBadRequest, errors.New("введите вопрос"))
-		return
-	case len([]rune(q)) > 500:
-		writeError(w, http.StatusBadRequest, errors.New("вопрос длиннее 500 символов"))
-		return
-	}
-	st := a.Agent.Defaults
-	if req.Settings != nil {
-		st = *req.Settings
-	}
-	if err := st.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if err := a.Searcher.Refresh(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if len(a.Searcher.Chunks(a.Agent.Variant)) == 0 {
-		writeError(w, http.StatusConflict, search.ErrEmptyIndex)
-		return
-	}
-	res := a.Agent.Ask(r.Context(), q, st)
-	// только GPU: эмбеддинги и реранкер загружаются первыми запросами
-	for _, model := range []string{a.Searcher.Variants[0].Model, a.Agent.Reranker.Name()} {
-		if err := a.requireGPU(r.Context(), model); err != nil {
-			writeError(w, http.StatusServiceUnavailable, err)
-			return
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"result": res})
 }
 
 func sortedBooks(m map[string]*search.BookInfo) []*search.BookInfo {

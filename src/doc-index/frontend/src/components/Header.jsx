@@ -1,7 +1,7 @@
 import { fmtNum, plural, routeHash } from '../format.js';
 
 const TABS = [
-  { view: 'ask', title: 'Спросить' },
+  { view: 'chat', title: 'Чат' },
   { view: 'search', title: 'Поиск' },
   { view: 'read', title: 'Книги' },
   { view: 'index', title: 'Индекс' },
@@ -26,7 +26,7 @@ export default function Header({ route, status, error }) {
   return (
     <header className="header">
       <div className="header-row">
-        <a className="brand" href={routeHash('ask')}>
+        <a className="brand" href={routeHash('chat')}>
           <span className="brand-mark" aria-hidden="true">
             ≋
           </span>
@@ -34,7 +34,7 @@ export default function Header({ route, status, error }) {
             <span className="brand-title">Twain Expert</span>
             <span className="brand-sub">
               {status?.books?.length
-                ? `${status.books.length} ${plural(status.books.length, 'книга', 'книги', 'книг')} Марка Твена · ответы по отрывкам из книг`
+                ? `${status.books.length} ${plural(status.books.length, 'книга', 'книги', 'книг')} Марка Твена · беседа по отрывкам из книг`
                 : 'книги Марка Твена с Project Gutenberg'}
             </span>
           </span>

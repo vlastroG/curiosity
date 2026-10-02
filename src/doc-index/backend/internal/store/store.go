@@ -96,6 +96,9 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// DB -- сама база: в ней же хранятся чаты (пакет chat).
+func (s *Store) DB() *sql.DB { return s.db }
+
 // Close закрывает базу.
 func (s *Store) Close() error { return s.db.Close() }
 

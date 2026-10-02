@@ -1,21 +1,25 @@
 // Чистые функции интерфейса: маршруты, форматирование, раскраска глав
 // и разметка текста главы под подсветку чанков. Покрыты тестами (format.test.js).
 
-// ---------- маршруты (#/search?q=…, #/read/tom/3?c=…) ----------
+// ---------- маршруты (#/chat/3, #/search?q=…, #/read/tom/3?c=…) ----------
 
 export function parseRoute(hash) {
-  const raw = (hash || '').replace(/^#/, '') || '/ask';
+  const raw = (hash || '').replace(/^#/, '') || '/chat';
   const [path, qs = ''] = raw.split('?');
   const params = Object.fromEntries(new URLSearchParams(qs));
   const parts = path.split('/').filter(Boolean);
-  const view = parts[0] || 'ask';
+  const view = parts[0] || 'chat';
   if (view === 'read') {
     return { view, book: parts[1] || '', section: parts[2] === undefined ? null : Number(parts[2]), params };
   }
-  if (['ask', 'search', 'index'].includes(view)) {
+  if (view === 'chat') {
+    const id = Number(parts[1]);
+    return { view, id: Number.isInteger(id) && id > 0 ? id : null, params };
+  }
+  if (['search', 'index'].includes(view)) {
     return { view, params };
   }
-  return { view: 'ask', params: {} };
+  return { view: 'chat', id: null, params: {} };
 }
 
 export function routeHash(view, params = {}, ...parts) {
@@ -201,19 +205,6 @@ export function splitCitations(text) {
   return out;
 }
 
-export const VERDICT = {
-  correct: { text: 'верно', tone: 'good' },
-  partial: { text: 'частично', tone: 'fair' },
-  wrong: { text: 'неверно', tone: 'bad' },
-};
-
-// queryModeTitle -- как шёл поиск, по-человечески.
-export function queryModeTitle(cfg) {
-  if (!cfg) return '';
-  const q = { raw: 'вопрос как есть', en: 'перевод на английский', hyde: 'HyDE — гипотетический абзац-ответ', fuse: 'вопрос + перевод' }[cfg.query] || cfg.query;
-  return [cfg.parent ? 'small-to-big' : '', q, cfg.hybrid ? '+ BM25' : ''].filter(Boolean).join(' · ');
-}
-
 // ---------- воронка второго этапа ----------
 
 export const STAGE = {
@@ -233,12 +224,6 @@ export function funnelLine(f) {
   return parts.join(' → ');
 }
 
-// sameSettings -- настройки совпадают (для кнопки «спросить снова»).
-export function sameSettings(a, b) {
-  if (!a || !b) return false;
-  return ['query', 'kBefore', 'simMin', 'relMin', 'kAfter', 'order'].every((k) => Number(a[k]) === Number(b[k]) || a[k] === b[k]);
-}
-
 // clampSettings -- числа в допустимых диапазонах, как проверяет сервер.
 export function clampSettings(s) {
   const c = (v, lo, hi, d) => {
@@ -252,5 +237,51 @@ export function clampSettings(s) {
     relMin: c(s.relMin, 0, 1, 0.5),
     kAfter: Math.round(c(s.kAfter, 1, 10, 5)),
     order: ['rerank', 'cosine', 'fused'].includes(s.order) ? s.order : 'cosine',
+    compressAfter: Math.round(c(s.compressAfter, 4, 50, 12)),
   };
+}
+
+// ---------- чат ----------
+
+// fmtWhen -- время сообщения или чата: «только что», «5 мин назад», «14:30», «12 сен».
+export function fmtWhen(iso, now = new Date()) {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return '';
+  const min = Math.floor((now - t) / 60000);
+  if (min < 1) return 'только что';
+  if (min < 60) return `${min} мин назад`;
+  if (t.toDateString() === now.toDateString()) {
+    return t.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  }
+  const opts = { day: 'numeric', month: 'short' };
+  if (t.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+  return t.toLocaleDateString('ru-RU', opts).replace('.', '');
+}
+
+// memoryLine -- память задачи одной строкой для свёрнутой карточки.
+export function memoryLine(chat) {
+  const s = chat?.state || {};
+  const parts = [];
+  const n = (k, one, few, many) => `${k} ${plural(k, one, few, many)}`;
+  if (s.theses?.length) parts.push(n(s.theses.length, 'тезис', 'тезиса', 'тезисов'));
+  if (s.open?.length) parts.push(n(s.open.length, 'открытый вопрос', 'открытых вопроса', 'открытых вопросов'));
+  if (chat?.summarizedUpto) parts.push(`${n(chat.summarizedUpto, 'сообщение', 'сообщения', 'сообщений')} в сводке`);
+  return parts.join(' · ');
+}
+
+// citedNumbers -- номера отрывков, на которые сослался ответ.
+export function citedNumbers(text) {
+  return new Set(splitCitations(text).filter((s) => s.cite).map((s) => s.cite));
+}
+
+// settingsLine -- настройки чата кратко, для свёрнутой панели.
+export function settingsLine(s) {
+  if (!s) return '';
+  const q = { hyde: 'HyDE', en: 'перевод', raw: 'как есть' }[s.query] || s.query;
+  return `поиск: ${q}, top-${s.kBefore} → ${s.kAfter}, косинус ≥ ${s.simMin}, реранкер ≥ ${s.relMin} · сжатие после ${s.compressAfter} сообщений`;
+}
+
+// isFresh -- пункт памяти, появившийся, после реплики seq (подсветка «новое»).
+export function isFresh(item, seq) {
+  return !!seq && item.by === 'model' && item.since === seq;
 }

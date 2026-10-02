@@ -1,9 +1,11 @@
-// Command docindex -- Twain Expert: вопросы о книгах Марка Твена, ответ по
-// найденным отрывкам (RAG с переписыванием вопроса, фильтром и реранкером).
+// Command docindex -- Twain Expert: беседа о книгах Марка Твена, ответы по
+// найденным отрывкам (RAG с переписыванием запроса, фильтром и реранкером)
+// и с памятью задачи.
 //
 //	docindex serve              веб-интерфейс и API (по умолчанию)
 //	docindex index [--rebuild]  построить индекс: книги → чанки → эмбеддинги → SQLite
-//	docindex ask "вопрос"       ответ из терминала
+//	docindex chat               беседа в терминале
+//	docindex scenario           прогон длинных сценариев (eval/scenarios.json)
 //	docindex search "вопрос"    найденные отрывки
 //	docindex experiment         подбор порогов и top-K, сравнение режимов
 //	docindex stats              что лежит в индексе
@@ -28,6 +30,7 @@ import (
 	"time"
 
 	"doc-index/internal/book"
+	"doc-index/internal/chat"
 	"doc-index/internal/chunk"
 	"doc-index/internal/compare"
 	"doc-index/internal/embed"
@@ -66,8 +69,10 @@ func main() {
 		err = serve(ctx)
 	case "index":
 		err = indexCmd(ctx, args)
-	case "ask":
-		err = askCmd(ctx, args)
+	case "chat":
+		err = chatCmd(ctx)
+	case "scenario":
+		err = scenarioCmd(ctx, args)
 	case "search":
 		err = searchCmd(ctx, args)
 	case "experiment":
@@ -75,7 +80,7 @@ func main() {
 	case "stats":
 		err = statsCmd(ctx)
 	default:
-		err = fmt.Errorf("неизвестная команда %q: serve, index, ask, search, experiment, stats", cmd)
+		err = fmt.Errorf("неизвестная команда %q: serve, index, chat, scenario, search, experiment, stats", cmd)
 	}
 	if err != nil {
 		log.Fatalf("ошибка: %v", err)
@@ -94,8 +99,9 @@ type app struct {
 	params   chunk.Params
 	evalPath string // вопросы для подбора порогов
 
-	settings rag.Settings // настройки по умолчанию
-	tuned    bool         // взяты из подбора experiment
+	settings chat.Settings // настройки нового чата
+	tuned    bool          // настройки поиска взяты из подбора experiment
+	chats    *chat.Store
 
 	llm    rag.LLM
 	llmErr error
@@ -131,6 +137,9 @@ func setup() (*app, error) {
 	if err := a.loadSettings(); err != nil {
 		return nil, err
 	}
+	if a.chats, err = chat.Open(st.DB()); err != nil {
+		return nil, err
+	}
 	m, provider, err := llm.ResolveModel(os.Getenv("RAG_MODEL"), os.Getenv)
 	a.llm = rag.LLM{Client: llm.New(durationEnv("LLM_TIMEOUT", 3*time.Minute)), Provider: provider, Model: m.ID,
 		MaxTokens: m.Budget()}
@@ -154,10 +163,11 @@ func (a *app) loadSettings() error {
 	s.SimMin = floatEnv("SIM_MIN", s.SimMin)
 	s.RelMin = floatEnv("REL_MIN", s.RelMin)
 	s.Order = env("RERANK_ORDER", s.Order)
-	if err := s.Validate(); err != nil {
-		return fmt.Errorf("настройки поиска: %w", err)
+	cs := chat.Settings{Settings: s, CompressAfter: intEnv("COMPRESS_AFTER", 12)}
+	if err := cs.Validate(); err != nil {
+		return fmt.Errorf("настройки чата: %w", err)
 	}
-	a.settings = s
+	a.settings = cs
 	return nil
 }
 
@@ -177,12 +187,15 @@ func (a *app) rewriter() *rag.Rewriter {
 func (a *app) agent(s *search.Searcher) *rag.Agent {
 	return &rag.Agent{
 		LLM:       a.llm,
-		Rewriter:  a.rewriter(),
 		Retriever: &retrieve.Retriever{Searcher: s},
 		Variant:   experiment.VariantMain,
 		Reranker:  a.reranker,
-		Defaults:  a.settings,
+		Defaults:  a.settings.Settings,
 	}
+}
+
+func (a *app) service(ag *rag.Agent) *chat.Service {
+	return &chat.Service{Store: a.chats, Agent: ag, Compressor: rag.Compressor{LLM: a.llm}}
 }
 
 func serve(ctx context.Context) error {
@@ -198,6 +211,7 @@ func serve(ctx context.Context) error {
 	}
 
 	s := a.searcher()
+	ag := a.agent(s)
 	handler := httpapi.New(httpapi.Config{
 		Store: a.store, Searcher: s, Ollama: a.ollama, OllamaURL: a.ollama.URL, Jobs: jobs,
 		Index: func(ctx context.Context, rebuild bool, emit func(index.Event)) error {
@@ -205,7 +219,8 @@ func serve(ctx context.Context) error {
 			return err
 		},
 		EvalPath: a.evalPath, Params: a.params, StaticDir: env("STATIC_DIR", "./web"),
-		Agent: a.agent(s), LLMError: a.llmErr, Tuned: a.tuned,
+		Agent: ag, Chats: a.service(ag), ChatDefaults: a.settings, LLMBudget: a.llm.MaxTokens,
+		LLMError: a.llmErr, Tuned: a.tuned,
 	})
 	addr := ":" + env("PORT", "8080")
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
@@ -216,8 +231,8 @@ func serve(ctx context.Context) error {
 		_ = srv.Shutdown(shutdown)
 	}()
 	st := a.settings
-	log.Printf("слушаю %s; книг %d; эмбеддинги %s, реранкер %s; top-K до %d, косинус ≥ %.2f, реранкер ≥ %.2f, top-K после %d; ответы: %s",
-		addr, len(a.books), experiment.Model, a.reranker.Model, st.KBefore, st.SimMin, st.RelMin, st.KAfter, a.llm.Model)
+	log.Printf("слушаю %s; книг %d; эмбеддинги %s, реранкер %s; top-K до %d, косинус ≥ %.2f, реранкер ≥ %.2f, top-K после %d; сжатие после %d; ответы: %s",
+		addr, len(a.books), experiment.Model, a.reranker.Model, st.KBefore, st.SimMin, st.RelMin, st.KAfter, st.CompressAfter, a.llm.Model)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -245,31 +260,6 @@ func indexCmd(ctx context.Context, args []string) error {
 		log.Printf("[%s] %s", e.Stage, e.Message)
 	})
 	return err
-}
-
-func askCmd(ctx context.Context, args []string) error {
-	question := strings.TrimSpace(strings.Join(args, " "))
-	if question == "" {
-		return errors.New(`нужен вопрос: docindex ask "кто покрасил забор вместо Тома"`)
-	}
-	a, err := setup()
-	if err != nil {
-		return err
-	}
-	defer a.store.Close()
-	if a.llmErr != nil {
-		return a.llmErr
-	}
-	res := a.agent(a.searcher()).Ask(ctx, question, a.settings)
-	fmt.Printf("Вопрос: %s\nМодель: %s\n", question, res.Model)
-	f := res.Funnel
-	fmt.Printf("\n%s\n\n(%.1f с)\n", orError(res.Answer), res.Ms/1000)
-	fmt.Printf("  поиск: %s\n  реранкер: %s\n  %d кандидатов → %d прошли порог косинуса → %d прошли реранкер → %d в ответе\n",
-		shorten(res.SearchQuery, 120), res.RerankQuery, f.Total, f.PassedSim, f.PassedRel, f.Kept)
-	for _, s := range res.Sources {
-		fmt.Printf("  [%d] реранкер %.2f, cos %.3f  %s · %s\n", s.N, *s.Rel, s.Cosine, s.BookTitle, s.Section)
-	}
-	return nil
 }
 
 func orError(a rag.Answer) string {

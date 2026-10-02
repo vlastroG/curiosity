@@ -4,7 +4,7 @@ import { parseRoute, routeHash } from './format.js';
 import Header from './components/Header.jsx';
 import SearchView from './components/SearchView.jsx';
 import ReaderView from './components/ReaderView.jsx';
-import AskView from './components/AskView.jsx';
+import ChatView from './components/ChatView.jsx';
 import IndexView from './components/IndexView.jsx';
 
 function useRoute() {
@@ -66,7 +66,7 @@ export default function App() {
     <div className="app">
       <Header route={route} status={status} error={statusError} />
       <main className="main">
-        {route.view === 'ask' && <AskView route={route} status={status} questions={questions} indexReady={indexReady} />}
+        {route.view === 'chat' && <ChatView route={route} status={status} indexReady={indexReady} />}
         {route.view === 'search' && (
           <SearchView route={route} status={status} questions={questions} indexReady={indexReady} />
         )}

@@ -110,7 +110,7 @@ func TestPromptEscapesSources(t *testing.T) {
 	if !strings.Contains(p, `book="Tom 'Sawyer'"`) || !strings.Contains(p, `chapter="Chapter II. ‹b›"`) {
 		t.Errorf("атрибуты не экранированы:\n%s", p)
 	}
-	if !strings.Contains(p, "only snippet") || !strings.HasSuffix(p, "Вопрос: Кто?") {
+	if !strings.Contains(p, "only snippet") || !strings.HasSuffix(p, "Реплика пользователя: Кто?") {
 		t.Errorf("промпт:\n%s", p)
 	}
 }
@@ -136,7 +136,7 @@ func TestConfigNeedsRewrite(t *testing.T) {
 
 func TestPromptWithoutSources(t *testing.T) {
 	p := Prompt("Что Твен писал об Антарктиде?", nil)
-	if p != "<sources>\n</sources>\n\nВопрос: Что Твен писал об Антарктиде?" {
+	if p != "<sources>\n</sources>\n\nРеплика пользователя: Что Твен писал об Антарктиде?" {
 		t.Fatalf("%q", p)
 	}
 }
@@ -156,5 +156,93 @@ func TestSettingsValidate(t *testing.T) {
 	bad.KAfter = 0
 	if bad.Validate() == nil {
 		t.Error("top-K после")
+	}
+}
+
+func TestPlannerParsesMessyJSONAndKeepsUserItems(t *testing.T) {
+	f := &fakeLLM{reply: func(_, user string) (string, error) {
+		return "<think>draft {\"en\": \"x\"}</think>Вот:\n```json\n" +
+			`{"en":"What did Huck decide about Jim?","hyde":"I'll go to hell.","topic":"Новая тема",` +
+			`"theses":["Гек выбирает Джима (Гек)","мой тезис","Гек выбирает Джима (Гек)"],"open":["а Вильсон?"]}` + "\n```", nil
+	}}
+	old := TaskState{Topic: "Добро и зло", TopicLocked: true, Theses: []Item{
+		{Text: "мой тезис", By: ByUser, Since: 1},
+		{Text: "Гек выбирает Джима (Гек)", By: ByModel, Since: 2},
+	}}
+	plan, err := Planner{LLM: LLM{Client: f, Model: "m"}}.Plan(context.Background(), Conversation{State: old, Seq: 5}, "а потом?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.EN != "What did Huck decide about Jim?" || plan.HyDE == "" {
+		t.Fatalf("запрос: %+v", plan.Rewrite)
+	}
+	s := plan.State
+	if s.Topic != "Добро и зло" || !s.TopicLocked {
+		t.Errorf("закреплённая тема: %q", s.Topic)
+	}
+	if len(s.Theses) != 2 || s.Theses[0].By != ByUser || s.Theses[1].Since != 2 {
+		t.Errorf("тезисы: %+v", s.Theses)
+	}
+	if len(s.Open) != 1 || s.Open[0].Since != 5 || s.Open[0].By != ByModel {
+		t.Errorf("открытые вопросы: %+v", s.Open)
+	}
+
+	f.reply = func(_, _ string) (string, error) { return `{"topic":"т"}`, nil }
+	if _, err := (Planner{LLM: LLM{Client: f}}).Plan(context.Background(), Conversation{}, "x"); err == nil {
+		t.Error("план без запроса принят")
+	}
+}
+
+func TestMergeTakesTopicWhenFree(t *testing.T) {
+	s := Merge(TaskState{Topic: "старая"}, "  новая   тема ", nil, nil, 1)
+	if s.Topic != "новая тема" || s.Theses == nil || s.Open == nil {
+		t.Fatalf("%+v", s)
+	}
+	if Merge(TaskState{Topic: "старая"}, "", nil, nil, 1).Topic != "старая" {
+		t.Error("пустая тема модели затёрла прежнюю")
+	}
+	many := make([]string, 20)
+	for i := range many {
+		many[i] = strings.Repeat("п", i+1)
+	}
+	if got := Merge(TaskState{}, "", many, nil, 1); len(got.Theses) != MaxItems {
+		t.Errorf("пунктов %d", len(got.Theses))
+	}
+}
+
+func TestChatPromptHasStateSummaryAndDialogue(t *testing.T) {
+	c := Conversation{
+		State:   TaskState{Topic: "Добро и зло", Theses: []Item{{Text: "тезис", By: ByUser}}},
+		Summary: "раньше говорили о Геке",
+		Recent:  []Turn{{Role: "user", Text: "привет"}, {Role: "assistant", Text: "здравствуйте [1]"}},
+	}
+	p := ChatPrompt(c, []Source{{N: 1, Text: "passage"}}, "а Джим?")
+	for _, want := range []string{"Тема: Добро и зло", "- тезис", "<summary>\nраньше говорили о Геке", "Пользователь: привет",
+		"Эксперт: здравствуйте [1]", `<source id="1"`, "Реплика пользователя: а Джим?"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("нет %q в промпте:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "by=") {
+		t.Error("пометки авторов нужны только планировщику")
+	}
+	if !strings.Contains(planPrompt(c, "x"), "[by=user] тезис") {
+		t.Error("планировщик не видит, что тезис пользователя")
+	}
+}
+
+func TestTaskStateValidate(t *testing.T) {
+	ok := TaskState{Topic: "т", Theses: []Item{{Text: "а", By: ByUser}}}
+	if ok.Validate() != nil {
+		t.Fatal("допустимое состояние")
+	}
+	for name, s := range map[string]TaskState{
+		"пустой пункт": {Theses: []Item{{Text: " ", By: ByUser}}},
+		"автор":        {Open: []Item{{Text: "а", By: "x"}}},
+		"длина пункта": {Open: []Item{{Text: strings.Repeat("а", MaxItem+1), By: ByUser}}},
+	} {
+		if s.Validate() == nil {
+			t.Errorf("%s: принято", name)
+		}
 	}
 }

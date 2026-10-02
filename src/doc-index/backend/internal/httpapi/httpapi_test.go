@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"doc-index/internal/book"
+	"doc-index/internal/chat"
 	"doc-index/internal/chunk"
 	"doc-index/internal/embed"
 	"doc-index/internal/httpapi"
@@ -58,17 +59,23 @@ func setup(t *testing.T) *fixture {
 	searcher := &search.Searcher{Store: st, Embedder: client, Variants: variants}
 	agent := &rag.Agent{
 		LLM:       rag.LLM{Client: fakeLLM{}, Model: "fake"},
-		Rewriter:  &rag.Rewriter{LLM: rag.LLM{Client: fakeLLM{}, Model: "fake"}, Path: filepath.Join(dir, "rewrites.json")},
 		Retriever: &retrieve.Retriever{Searcher: searcher},
 		Variant:   "structure",
 		Reranker:  rerank.NewOllama(o.URL, "reranker", 10*time.Second),
 		Defaults: rag.Settings{Query: retrieve.QueryHyDE,
 			Params: rerank.Params{KBefore: 10, SimMin: 0, RelMin: 0.5, KAfter: 3, Order: rerank.OrderRerank}},
 	}
+	chats, err := chat.Open(st.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := httpapi.New(httpapi.Config{
 		Store: st, Searcher: searcher,
 		Ollama: client, OllamaURL: o.URL, Jobs: &index.Jobs{},
-		Agent: agent,
+		Agent:        agent,
+		Chats:        &chat.Service{Store: chats, Agent: agent, Compressor: rag.Compressor{LLM: agent.LLM}},
+		ChatDefaults: chat.Settings{Settings: agent.Defaults, CompressAfter: 4},
+		LLMBudget:    1000,
 		Index: func(ctx context.Context, rebuild bool, emit func(index.Event)) error {
 			_, err := ix.Run(ctx, rebuild, emit)
 			return err
@@ -286,85 +293,125 @@ func TestSPAAndHeaders(t *testing.T) {
 	}
 }
 
-// fakeLLM -- модель-заглушка: переписывает, отвечает и оценивает по шаблону.
+// fakeLLM -- модель-заглушка: планирует, отвечает и сжимает по шаблону.
 type fakeLLM struct{}
 
 func (fakeLLM) Chat(_ context.Context, _ llm.Provider, req llm.Request) (llm.Response, error) {
 	sys, user := req.Messages[0].Content, req.Messages[1].Content
 	switch {
-	case strings.HasPrefix(sys, "You prepare"):
-		var items []struct{ ID, Q string }
-		_ = json.Unmarshal([]byte(user), &items)
-		out := "["
-		for i, it := range items {
-			if i > 0 {
-				out += ","
-			}
-			out += `{"id":"` + it.ID + `","en":"whitewash the fence with a brush","hyde":"Tom took the brush and the whitewash."}`
-		}
-		return llm.Response{Text: out + "]"}, nil
-	case strings.HasPrefix(sys, "Ты проверяешь"):
-		return llm.Response{Text: `{"a":{"verdict":"partial","reason":"общо"},"b":{"verdict":"correct","reason":"по отрывку"}}`}, nil
-	case strings.Contains(sys, "<sources>"):
+	case strings.HasPrefix(sys, "You keep the task memory"):
+		return llm.Response{Text: `{"en":"whitewash the fence with a brush","hyde":"Tom took the brush and the whitewash.",` +
+			`"topic":"Работа и игра у Тома","theses":["Том превращает работу в игру (Том Сойер)"],"open":[]}`}, nil
+	case strings.HasPrefix(sys, "Ты сжимаешь"):
+		return llm.Response{Text: "Говорили о заборе."}, nil
+	case strings.HasPrefix(sys, "Ты — эксперт"):
 		if !strings.Contains(user, "<source id=\"1\"") {
-			return llm.Response{Text: "нет отрывков"}, nil
+			return llm.Response{Text: "В найденных отрывках об этом нет."}, nil
 		}
 		return llm.Response{Text: "Забор красили друзья Тома [1]."}, nil
 	}
-	return llm.Response{Text: "По памяти: кажется, забор."}, nil
+	return llm.Response{Text: "?"}, nil
 }
 
-func TestAsk(t *testing.T) {
+func (f *fixture) do(t *testing.T, method, path, body string, out any) int {
+	t.Helper()
+	req, _ := http.NewRequest(method, f.srv.URL+path, strings.NewReader(body))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if out != nil {
+		_ = json.NewDecoder(resp.Body).Decode(out)
+	}
+	return resp.StatusCode
+}
+
+type chatResp struct {
+	Chat chat.Chat `json:"chat"`
+}
+
+func TestChats(t *testing.T) {
 	f := setup(t)
+	var cr chatResp
+	if code := f.post(t, "/api/chats", ``, &cr); code != http.StatusCreated || cr.Chat.Settings.CompressAfter != 4 ||
+		cr.Chat.Messages == nil {
+		t.Fatalf("создание: %d %+v", code, cr.Chat) // интерфейсу нужен массив сообщений, даже пустой
+	}
+	id := strconv.FormatInt(cr.Chat.ID, 10)
 	var e map[string]string
-	if code := f.post(t, "/api/ask", `{"question":"x"}`, &e); code != http.StatusConflict {
+	if code := f.post(t, "/api/chats/"+id+"/messages", `{"text":"x"}`, &e); code != http.StatusConflict {
 		t.Errorf("без индекса: %d %v", code, e)
 	}
 	f.buildIndex(t)
-	if code := f.post(t, "/api/ask", `{"question":"  "}`, nil); code != http.StatusBadRequest {
-		t.Errorf("пустой вопрос: %d", code)
+	if code := f.post(t, "/api/chats/"+id+"/messages", `{"text":"  "}`, nil); code != http.StatusBadRequest {
+		t.Errorf("пустое сообщение: %d", code)
 	}
-	if code := f.post(t, "/api/ask", `{"question":"q","settings":{"query":"hyde","kBefore":99,"kAfter":5,"order":"rerank"}}`, &e); code != http.StatusBadRequest ||
+	if code := f.post(t, "/api/chats/999/messages", `{"text":"x"}`, nil); code != http.StatusNotFound {
+		t.Errorf("нет чата: %d", code)
+	}
+
+	for i := 0; i < 3; i++ {
+		if code := f.post(t, "/api/chats/"+id+"/messages", `{"text":"кто красил забор?"}`, &cr); code != 200 {
+			t.Fatalf("сообщение: %d", code)
+		}
+	}
+	c := cr.Chat
+	if len(c.Messages) != 6 || c.Title != "Работа и игра у Тома" || len(c.State.Theses) != 1 {
+		t.Fatalf("чат: %d сообщений, %q, %+v", len(c.Messages), c.Title, c.State)
+	}
+	ans := c.Messages[5]
+	if ans.Text != "Забор красили друзья Тома [1]." || ans.Result == nil || len(ans.Result.Sources) == 0 ||
+		ans.Result.SearchQuery != ans.Result.Rewrite.HyDE || ans.Result.Funnel.Total != 10 {
+		t.Fatalf("ответ: %+v", ans)
+	}
+	if c.SummarizedUpto != 2 || c.Summary != "Говорили о заборе." {
+		t.Fatalf("сжатие после 4: upto %d %q", c.SummarizedUpto, c.Summary)
+	}
+
+	// настройки чата: вне диапазона -- 400, порог реранкера 1 -- источников нет
+	if code := f.do(t, "PATCH", "/api/chats/"+id, `{"settings":{"query":"hyde","kBefore":99,"kAfter":5,"order":"rerank","compressAfter":8}}`, &e); code != 400 ||
 		!strings.Contains(e["error"], "top-K до") {
 		t.Errorf("настройки вне диапазона: %d %v", code, e)
 	}
-
-	var resp struct {
-		Result rag.Result `json:"result"`
+	body := `{"title":"Забор","settings":{"query":"raw","kBefore":5,"simMin":0,"relMin":1,"kAfter":3,"order":"cosine","compressAfter":20}}`
+	if code := f.do(t, "PATCH", "/api/chats/"+id, body, &cr); code != 200 || cr.Chat.Title != "Забор" || cr.Chat.Settings.CompressAfter != 20 {
+		t.Fatalf("настройки: %d %+v", code, cr.Chat.Settings)
 	}
-	if code := f.post(t, "/api/ask", `{"question":"whitewash fence brush"}`, &resp); code != 200 {
-		t.Fatalf("ask: %d", code)
-	}
-	r := resp.Result
-	im := r
-	if im.Error != "" || !strings.Contains(im.Text, "[1]") || im.Rewrite.HyDE == "" || im.SearchQuery != im.Rewrite.HyDE || im.RerankQuery != im.Rewrite.EN || !im.Rewritten {
-		t.Fatalf("улучшенный: %+v", im)
-	}
-	fn := im.Funnel
-	if fn.Total != 10 || fn.Kept == 0 || fn.Kept > 3 || len(im.Sources) != fn.Kept || fn.Scorer != "reranker" {
-		t.Fatalf("воронка: total %d kept %d, отрывков %d", fn.Total, fn.Kept, len(im.Sources))
-	}
-	for _, s := range im.Sources {
-		if s.Rel == nil || *s.Rel < 0.5 || s.Sections[0].Key != "I" {
-			t.Errorf("отрывок %+v", s)
-		}
-	}
-	for _, c := range fn.Candidates {
-		if c.Stage == "" || c.Reason == "" {
-			t.Errorf("кандидат без стадии: %+v", c)
-		}
+	f.post(t, "/api/chats/"+id+"/messages", `{"text":"а дальше?"}`, &cr)
+	last := cr.Chat.Messages[len(cr.Chat.Messages)-1]
+	if last.Result.Funnel.Total != 5 || len(last.Result.Sources) != 0 || !strings.Contains(last.Text, "нет") {
+		t.Fatalf("свои настройки не применились: %+v", last.Result.Funnel)
 	}
 
-	// свои настройки: порог реранкера 1 -- ни один отрывок не проходит
-	body := `{"question":"whitewash fence brush","settings":{"query":"raw","kBefore":5,"simMin":0,"relMin":1,"kAfter":3,"order":"cosine"}}`
-	if code := f.post(t, "/api/ask", body, &resp); code != 200 {
-		t.Fatalf("ask со своими настройками: %d", code)
+	// память задачи: тему закрепляет пользователь
+	state := `{"topic":"Труд у Твена","topicLocked":true,"theses":[{"text":"мой тезис","by":"user","since":2}],"open":[]}`
+	if code := f.do(t, "PUT", "/api/chats/"+id+"/state", state, &cr); code != 200 || !cr.Chat.State.TopicLocked {
+		t.Fatalf("память: %d %+v", code, cr.Chat.State)
 	}
-	if resp.Result.Funnel.Total != 5 || resp.Result.Funnel.Kept != 0 || resp.Result.Rewrite.EN != "" {
-		t.Fatalf("свои настройки не применились: %+v", resp.Result.Funnel)
+	f.post(t, "/api/chats/"+id+"/messages", `{"text":"ещё"}`, &cr)
+	if cr.Chat.State.Topic != "Труд у Твена" || cr.Chat.State.Theses[0].Text != "мой тезис" {
+		t.Fatalf("закреплённая тема: %+v", cr.Chat.State)
 	}
-	for _, path := range []string{"/api/controls", "/api/rag-eval", "/api/experiment", "/api/compare"} {
-		if code := f.get(t, path, nil); code != http.StatusNotFound {
+	if code := f.do(t, "PUT", "/api/chats/"+id+"/state", `{"topic":"","topicLocked":true}`, nil); code != 400 {
+		t.Errorf("пустая закреплённая тема: %d", code)
+	}
+
+	var list struct {
+		Chats []chat.Chat `json:"chats"`
+	}
+	f.get(t, "/api/chats", &list)
+	if len(list.Chats) != 1 || list.Chats[0].Count != 10 || list.Chats[0].Messages != nil {
+		t.Fatalf("список: %+v", list.Chats)
+	}
+	if code := f.do(t, "DELETE", "/api/chats/"+id, "", nil); code != http.StatusNoContent {
+		t.Fatalf("удаление: %d", code)
+	}
+	if code := f.get(t, "/api/chats/"+id, nil); code != http.StatusNotFound {
+		t.Errorf("удалённый чат: %d", code)
+	}
+	for _, path := range []string{"/api/ask", "/api/controls", "/api/compare"} {
+		if code := f.post(t, path, `{}`, nil); code != http.StatusNotFound && code != http.StatusMethodNotAllowed {
 			t.Errorf("%s: %d, ожидался 404", path, code)
 		}
 	}
@@ -374,12 +421,14 @@ func TestStatusShowsDefaults(t *testing.T) {
 	f := setup(t)
 	var st struct {
 		Rag struct {
-			Reranker string       `json:"reranker"`
-			Defaults rag.Settings `json:"defaults"`
+			Reranker string        `json:"reranker"`
+			Budget   int           `json:"budget"`
+			Defaults chat.Settings `json:"defaults"`
 		} `json:"rag"`
 	}
 	f.get(t, "/api/status", &st)
-	if st.Rag.Reranker != "reranker" || st.Rag.Defaults.KBefore != 10 || st.Rag.Defaults.Query != "hyde" {
+	if st.Rag.Reranker != "reranker" || st.Rag.Defaults.KBefore != 10 || st.Rag.Defaults.Query != "hyde" ||
+		st.Rag.Defaults.CompressAfter != 4 || st.Rag.Budget != 1000 {
 		t.Fatalf("%+v", st.Rag)
 	}
 }

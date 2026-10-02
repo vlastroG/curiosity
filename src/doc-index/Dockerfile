@@ -26,7 +26,7 @@ USER docindex
 ENV STATIC_DIR=/app/web \
     DATA_DIR=/data \
     EVAL_FILE=/app/eval/questions.json \
-    RAG_EVAL_FILE=/app/eval/rag.json \
+    SCENARIOS_FILE=/app/eval/scenarios.json \
     PORT=8080
 EXPOSE 8080
 ENTRYPOINT ["/app/docindex"]

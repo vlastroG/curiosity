@@ -19,15 +19,18 @@ import {
 } from './format.js';
 
 test('маршруты туда и обратно', () => {
-  assert.deepEqual(parseRoute(''), { view: 'ask', params: {} });
+  assert.deepEqual(parseRoute(''), { view: 'chat', id: null, params: {} });
+  assert.deepEqual(parseRoute('#/chat/12'), { view: 'chat', id: 12, params: {} });
+  assert.equal(parseRoute('#/chat/abc').id, null);
+  assert.equal(routeHash('chat', {}, 7), '#/chat/7');
   assert.deepEqual(parseRoute('#/index'), { view: 'index', params: {} });
-  assert.equal(parseRoute('#/quality').view, 'ask');
+  assert.equal(parseRoute('#/ask').view, 'chat');
   const h = readHash('tom', 3, 'structure-tom-0012', 'structure');
   assert.equal(h, '#/read/tom/3?c=structure-tom-0012&v=structure');
   assert.deepEqual(parseRoute(h), { view: 'read', book: 'tom', section: 3, params: { c: 'structure-tom-0012', v: 'structure' } });
   assert.equal(routeHash('search', { q: 'забор', qid: '' }), '#/search?q=%D0%B7%D0%B0%D0%B1%D0%BE%D1%80');
   assert.equal(parseRoute(routeHash('search', { q: 'забор' })).params.q, 'забор');
-  assert.equal(parseRoute('#/nonsense').view, 'ask');
+  assert.equal(parseRoute('#/nonsense').view, 'chat');
 });
 
 test('склонения и числа', () => {
@@ -110,7 +113,7 @@ test('примеры вопросов поровну из книг', () => {
   );
 });
 
-import { splitCitations, queryModeTitle } from './format.js';
+import { splitCitations } from './format.js';
 
 test('сноски в ответе', () => {
   assert.deepEqual(splitCitations('Яблоко [1]. И змей [2, 3][4].'), [
@@ -126,12 +129,7 @@ test('сноски в ответе', () => {
   assert.deepEqual(splitCitations(''), []);
 });
 
-test('подпись режима поиска', () => {
-  assert.equal(queryModeTitle({ query: 'en', hybrid: true }), 'перевод на английский · + BM25');
-  assert.equal(queryModeTitle({ query: 'raw', parent: 'structure' }), 'small-to-big · вопрос как есть');
-});
-
-import { funnelLine, sameSettings, clampSettings } from './format.js';
+import { funnelLine, clampSettings, fmtWhen, memoryLine, citedNumbers, isFresh, settingsLine } from './format.js';
 
 test('строка воронки', () => {
   assert.equal(
@@ -141,11 +139,40 @@ test('строка воронки', () => {
   assert.equal(funnelLine({ total: 20, passedSim: 20, passedRel: 0, kept: 0 }), '20 кандидатов → 0 одобрил реранкер → 0 в ответе');
 });
 
-test('настройки: сравнение и границы', () => {
-  const a = { query: 'hyde', kBefore: 20, simMin: 0.3, relMin: 0.5, kAfter: 5 };
-  assert.ok(sameSettings(a, { ...a, simMin: '0.3' }));
-  assert.ok(!sameSettings(a, { ...a, relMin: 0.6 }));
-  assert.deepEqual(clampSettings({ query: 'x', kBefore: 99, simMin: -1, relMin: 'abc', kAfter: 3.6 }), {
-    query: 'hyde', kBefore: 50, simMin: 0, relMin: 0.5, kAfter: 4, order: 'cosine',
+test('настройки: границы', () => {
+  assert.deepEqual(clampSettings({ query: 'x', kBefore: 99, simMin: -1, relMin: 'abc', kAfter: 3.6, compressAfter: 2 }), {
+    query: 'hyde', kBefore: 50, simMin: 0, relMin: 0.5, kAfter: 4, order: 'cosine', compressAfter: 4,
   });
+  assert.equal(clampSettings({}).compressAfter, 12);
+  assert.equal(
+    settingsLine({ query: 'hyde', kBefore: 10, kAfter: 5, simMin: 0, relMin: 0.01, compressAfter: 12 }),
+    'поиск: HyDE, top-10 → 5, косинус ≥ 0, реранкер ≥ 0.01 · сжатие после 12 сообщений'
+  );
+});
+
+test('время в списке чатов', () => {
+  const now = new Date(2026, 9, 2, 15, 0);
+  assert.equal(fmtWhen(new Date(2026, 9, 2, 14, 59, 30).toISOString(), now), 'только что');
+  assert.equal(fmtWhen(new Date(2026, 9, 2, 14, 55).toISOString(), now), '5 мин назад');
+  assert.equal(fmtWhen(new Date(2026, 9, 2, 9, 5).toISOString(), now), '09:05');
+  assert.match(fmtWhen(new Date(2026, 8, 12).toISOString(), now), /^12 сент?/);
+  assert.equal(fmtWhen('nonsense', now), '');
+});
+
+test('память задачи кратко и свежие пункты', () => {
+  const chat = {
+    state: { topic: 'т', theses: [{}, {}, {}, {}, {}], open: [{}, {}] },
+    summarizedUpto: 8,
+  };
+  assert.equal(memoryLine(chat), '5 тезисов · 2 открытых вопроса · 8 сообщений в сводке');
+  assert.equal(memoryLine({ state: { theses: [{}], open: [] } }), '1 тезис');
+  assert.ok(isFresh({ by: 'model', since: 5 }, 5));
+  assert.ok(!isFresh({ by: 'user', since: 5 }, 5));
+  assert.ok(!isFresh({ by: 'model', since: 3 }, 5));
+  assert.ok(!isFresh({ by: 'model', since: 0 }, 0));
+});
+
+test('на какие отрывки сослался ответ', () => {
+  assert.deepEqual([...citedNumbers('Гек решает [2]. И Джим [1, 2].')], [2, 1]);
+  assert.equal(citedNumbers('без ссылок').size, 0);
 });

@@ -20,8 +20,14 @@ export const getSectionChunks = (book, n, variant) =>
   request(`/api/books/${encodeURIComponent(book)}/sections/${n}/chunks?variant=${encodeURIComponent(variant)}`);
 export const getChunk = (variant, id) =>
   request(`/api/chunks/${encodeURIComponent(variant)}/${encodeURIComponent(id)}`);
-export const ask = (question, settings) =>
-  request('/api/ask', { method: 'POST', body: JSON.stringify({ question, settings }) });
+export const listChats = () => request('/api/chats');
+export const createChat = () => request('/api/chats', { method: 'POST' });
+export const getChat = (id) => request(`/api/chats/${id}`);
+export const patchChat = (id, patch) => request(`/api/chats/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+export const deleteChat = (id) => request(`/api/chats/${id}`, { method: 'DELETE' });
+export const putState = (id, state) => request(`/api/chats/${id}/state`, { method: 'PUT', body: JSON.stringify(state) });
+export const sendMessage = (id, text) =>
+  request(`/api/chats/${id}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
 export const search = (query, variants, book, k = 5) =>
   request('/api/search', { method: 'POST', body: JSON.stringify({ query, variants, book, k }) });
 export const startIndex = (rebuild) =>
