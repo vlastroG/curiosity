@@ -1,0 +1,17 @@
+# llm-cli
+
+CLI на Go для локальной LLM. Модель работает в Ollama, оба компонента -- в Docker.
+
+**Модель:** `qwen3.5:9b` -- бесплатная, ~6.6 ГБ в Q4, целиком помещается в 8 ГБ видеопамяти (RTX 3060 Ti).
+
+## Запуск
+
+```bash
+docker compose up -d ollama
+docker compose run --rm llmcli ask "Что такое горутина?"
+docker compose run --rm llmcli help
+```
+
+Первый `ask` скачивает модель. `help` показывает все флаги (`--temperature`, `--max-tokens`, `--seed`, ...), сведения о модели и её ограничения.
+
+Чтобы передать текст через конвейер, нужен флаг `-T`: `cat main.go | docker compose run --rm -T llmcli ask "Найди ошибки"`.

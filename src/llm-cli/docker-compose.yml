@@ -1,0 +1,38 @@
+# ollama -- модель qwen3.5:9b на видеокарте NVIDIA; веса в томе ollama-models
+# llmcli -- CLI, запускается по требованию: docker compose run --rm llmcli ask "..."
+name: llm-cli
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  llmcli:
+    build: .
+    profiles: [cli]
+    stdin_open: true
+    environment:
+      OLLAMA_URL: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+volumes:
+  ollama-models:
