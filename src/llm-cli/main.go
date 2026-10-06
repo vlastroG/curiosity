@@ -1,6 +1,7 @@
 // llmcli -- CLI для локальной модели qwen3.5:9b, запущенной в Ollama.
 //
 //	llmcli ask [флаги] "вопрос"   -- спросить модель, ответ печатается по мере генерации
+//	llmcli serve                  -- HTTP-сервер в формате OpenAI для других сервисов
 //	llmcli help                   -- справка, сведения о модели и её ограничения
 package main
 
@@ -61,6 +62,14 @@ func run(ctx context.Context, c *client, args []string, stdin io.Reader, stdout,
 	switch cmd {
 	case "ask":
 		if err := ask(ctx, c, args[1:], stdin, stdout, stderr); err != nil {
+			if !errors.Is(err, flag.ErrHelp) {
+				fmt.Fprintln(stderr, "ошибка:", err)
+			}
+			return 1
+		}
+		return 0
+	case "serve":
+		if err := serve(ctx, c, args[1:], stderr); err != nil {
 			if !errors.Is(err, flag.ErrHelp) {
 				fmt.Fprintln(stderr, "ошибка:", err)
 			}
@@ -173,6 +182,8 @@ func help(ctx context.Context, c *client, out io.Writer) {
 
 Использование:
   llmcli ask [флаги] "вопрос"     спросить модель (флаги -- до вопроса)
+  llmcli serve [--addr :8080] [--ctx N]
+                                  HTTP-сервер /v1/chat/completions (формат OpenAI) для других сервисов
   llmcli help                     эта справка
 
 Примеры:

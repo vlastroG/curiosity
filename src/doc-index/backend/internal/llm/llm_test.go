@@ -42,6 +42,23 @@ func TestChatToolCalls(t *testing.T) {
 	}
 }
 
+func TestChatLocalWithoutKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "" {
+			t.Errorf("запрос %s, Authorization %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"ок"}}]}`))
+	}))
+	defer server.Close()
+
+	resp, err := New(0).Chat(context.Background(), Local(server.URL), Request{
+		Model: LocalModel, Messages: []Message{{Role: RoleUser, Content: "привет"}},
+	})
+	if err != nil || resp.Text != "ок" {
+		t.Fatalf("%+v %v", resp, err)
+	}
+}
+
 func TestChatRetries(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

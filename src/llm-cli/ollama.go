@@ -31,9 +31,10 @@ type chatRequest struct {
 
 // stats -- счётчики из последнего фрагмента ответа (done=true).
 type stats struct {
-	PromptEvalCount int   `json:"prompt_eval_count"`
-	EvalCount       int   `json:"eval_count"`
-	EvalDuration    int64 `json:"eval_duration"` // наносекунды
+	PromptEvalCount int    `json:"prompt_eval_count"`
+	EvalCount       int    `json:"eval_count"`
+	EvalDuration    int64  `json:"eval_duration"` // наносекунды
+	DoneReason      string `json:"done_reason"`   // stop или length
 }
 
 // modelInfo -- то, что help показывает о модели.

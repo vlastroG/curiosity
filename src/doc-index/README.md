@@ -23,6 +23,27 @@ docker compose up -d --build
    скачивает модели (около 4 ГБ) и книги; индекс строится около 10 минут.
 2. Вкладка «Чат» → «Новый чат» или одна из предложенных тем.
 
+### Локальная модель
+
+Вместо облака ответы может давать `qwen3.5:9b` на своей видеокарте — через
+[llmcli](../llm-cli) (`llmcli serve`). Ключи не нужны.
+
+1. В корневом `.env`: `RAG_MODEL=local`.
+2. Запуск с профилем:
+
+   ```bash
+   docker compose --profile local up -d --build
+   ```
+
+Первый запуск скачивает модель (~6.6 ГБ). Если она уже скачана для llm-cli, её можно
+скопировать в том doc-index:
+`docker run --rm -v llm-cli_ollama-models:/from -v doc-index_ollama-models:/to alpine cp -a /from/models/. /to/models/`.
+
+Контекст — максимум модели (262K токенов), ответ ограничен только им. 8 ГБ видеопамяти
+делят qwen3.5:9b, эмбеддинги и реранкер: Ollama подгружает модели по очереди, а большой
+контекст частично уходит в RAM, поэтому ответы медленнее облачных. Ускорить — уменьшить
+контекст: `LLMCLI_CTX=32768` в `.env`.
+
 ## Чат
 
 - **Список чатов** слева: создать, открыть, переименовать, удалить. Удаляется чат целиком,
@@ -49,7 +70,8 @@ docker compose up -d --build
 
 | Переменная | По умолчанию | Что это |
 |---|---|---|
-| `RAG_MODEL` | `nvidia/nemotron-3-super-120b-a12b:free` | модель ответов, памяти и сжатия; допустимо: `google/gemma-4-31b-it:free`, `qwen/qwen3.8-27b:free`, `deepseek-flash`, `deepseek-v4-pro` |
+| `RAG_MODEL` | `nvidia/nemotron-3-super-120b-a12b:free` | модель ответов, памяти и сжатия; допустимо: `google/gemma-4-31b-it:free`, `qwen/qwen3.8-27b:free`, `deepseek-flash`, `deepseek-v4-pro`, `local` (qwen3.5:9b через llmcli, см. «Локальная модель») |
+| `LLMCLI_CTX` | максимум модели | контекстное окно локальной модели в токенах |
 | `RERANK_MODEL` | `B-A-M-N/qwen3-reranker-0.6b-fp16` | реранкер в Ollama |
 | `RETRIEVAL_QUERY` | `hyde` | что превращать в вектор: `hyde`, `en` (запрос по-английски), `raw` (реплика как есть) |
 | `TOP_K_BEFORE` | из подбора | кандидатов из векторного поиска |

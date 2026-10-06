@@ -85,6 +85,57 @@ func TestAskPullsAndStreams(t *testing.T) {
 	}
 }
 
+func TestServeCompletions(t *testing.T) {
+	ollama, got := fakeOllama(t, true)
+	s := &server{c: newClient(ollama.URL)}
+	s.prepare(context.Background())
+	srv := httptest.NewServer(s.handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"model":"local","max_tokens":300000,"messages":[{"role":"system","content":"кратко"},{"role":"user","content":"привет"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Choices []struct {
+			Message      message `json:"message"`
+			FinishReason string  `json:"finish_reason"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 || len(out.Choices) != 1 || out.Choices[0].Message.Content != "Привет" {
+		t.Fatalf("status %d, ответ %+v", resp.StatusCode, out)
+	}
+	if out.Usage.PromptTokens != 5 || out.Usage.CompletionTokens != 2 {
+		t.Errorf("usage = %+v", out.Usage)
+	}
+	// контекст -- максимум модели, длина ответа им ограничена; JSON-числа -- float64
+	if got.Options["num_ctx"] != 262144.0 || got.Options["num_predict"] != 262144.0 || got.Think || len(got.Messages) != 2 {
+		t.Errorf("запрос к Ollama = %+v", got)
+	}
+}
+
+func TestServeNotReady(t *testing.T) {
+	srv := httptest.NewServer((&server{}).handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("health до готовности = %d", resp.StatusCode)
+	}
+}
+
 func TestHelp(t *testing.T) {
 	srv, _ := fakeOllama(t, true)
 	var out bytes.Buffer

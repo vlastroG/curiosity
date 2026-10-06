@@ -14,4 +14,6 @@ docker compose run --rm llmcli help
 
 Первый `ask` скачивает модель. `help` показывает все флаги (`--temperature`, `--max-tokens`, `--seed`, ...), сведения о модели и её ограничения.
 
+`llmcli serve` -- HTTP-сервер `/v1/chat/completions` в формате OpenAI; через него модель использует doc-index (`RAG_MODEL=local`).
+
 Чтобы передать текст через конвейер, нужен флаг `-T`: `cat main.go | docker compose run --rm -T llmcli ask "Найди ошибки"`.

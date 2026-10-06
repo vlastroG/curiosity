@@ -1,7 +1,8 @@
 package llm
 
 // Модель задаётся один раз переменной RAG_MODEL. Провайдер -- из id:
-// deepseek-* идёт в DeepSeek, остальное -- в OpenRouter.
+// local -- локальная qwen3.5:9b через llmcli, deepseek-* идёт в DeepSeek,
+// остальное -- в OpenRouter.
 
 import (
 	"fmt"
@@ -39,7 +40,12 @@ var Models = []Model{
 	{ID: "qwen/qwen3.8-27b:free", Title: "Qwen 3.8 27B (free)", Free: true},
 	{ID: "deepseek-flash", Title: "DeepSeek Flash"},
 	{ID: "deepseek-v4-pro", Title: "DeepSeek V4 Pro"},
+	// бюджет не урезан: llmcli сам ограничивает ответ контекстом модели
+	{ID: LocalModel, Title: "qwen3.5:9b (локально, llmcli)", Free: true},
 }
+
+// LocalModel -- id локальной модели в RAG_MODEL.
+const LocalModel = "local"
 
 // ResolveModel выбирает модель и провайдера. getenv -- os.Getenv.
 func ResolveModel(id string, getenv func(string) string) (Model, Provider, error) {
@@ -59,6 +65,13 @@ func ResolveModel(id string, getenv func(string) string) (Model, Provider, error
 			ids[i] = m.ID
 		}
 		return Model{}, Provider{}, fmt.Errorf("неизвестная модель %q; допустимые: %s", id, strings.Join(ids, ", "))
+	}
+	if id == LocalModel {
+		url := getenv("LLMCLI_URL")
+		if url == "" {
+			url = "http://llmcli:8080"
+		}
+		return model, Local(url), nil
 	}
 	appURL := getenv("APP_URL")
 	if appURL == "" {

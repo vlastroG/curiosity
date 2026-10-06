@@ -21,6 +21,7 @@ import (
 const (
 	ProviderDeepSeek   = "deepseek"
 	ProviderOpenRouter = "openrouter"
+	ProviderLocal      = "local"
 )
 
 // Provider -- куда и с каким ключом идти.
@@ -33,8 +34,8 @@ type Provider struct {
 }
 
 // Available -- есть ли ключ. Модели провайдера без ключа видны в интерфейсе,
-// но выбрать их нельзя.
-func (p Provider) Available() bool { return p.APIKey != "" }
+// но выбрать их нельзя. Локальной модели ключ не нужен.
+func (p Provider) Available() bool { return p.APIKey != "" || p.ID == ProviderLocal }
 
 // DeepSeek -- описание провайдера DeepSeek.
 func DeepSeek(apiKey string) Provider {
@@ -58,6 +59,15 @@ func OpenRouter(apiKey, appURL, appTitle string) Provider {
 			"HTTP-Referer": appURL,
 			"X-Title":      appTitle,
 		},
+	}
+}
+
+// Local -- локальная модель через llmcli serve (src/llm-cli): тот же протокол, без ключа.
+func Local(url string) Provider {
+	return Provider{
+		ID:       ProviderLocal,
+		Title:    "llmcli (локальная модель)",
+		Endpoint: strings.TrimRight(url, "/") + "/v1/chat/completions",
 	}
 }
 
@@ -183,7 +193,9 @@ func (c *Client) once(ctx context.Context, p Provider, body []byte) (Response, b
 	if err != nil {
 		return Response{}, false, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+	if p.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	for name, value := range p.ExtraHeaders {
 		httpReq.Header.Set(name, value)
