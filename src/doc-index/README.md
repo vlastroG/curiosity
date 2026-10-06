@@ -35,8 +35,13 @@ docker compose up -d --build
    docker compose --profile local up -d --build
    ```
 
-Первый запуск скачивает модель (~6.6 ГБ). Если она уже скачана для llm-cli, её можно
-скопировать в том doc-index:
+У doc-index своя копия модели — в томе `doc-index_ollama-models`, независимо от
+llm-cli: обновление или удаление модели в одном проекте не трогает другой. Модель
+задаёт `LLMCLI_MODEL` в корневом `.env` (по умолчанию `qwen3.5:9b`); отдельный llm-cli
+этот файл не читает.
+
+Первый запуск скачивает модель (~6.6 ГБ). Если она уже скачана для llm-cli, можно
+один раз скопировать её в том doc-index — дальше копии живут отдельно:
 `docker run --rm -v llm-cli_ollama-models:/from -v doc-index_ollama-models:/to alpine cp -a /from/models/. /to/models/`.
 
 Контекст — максимум модели (262K токенов), ответ ограничен только им. 8 ГБ видеопамяти
@@ -70,7 +75,8 @@ docker compose up -d --build
 
 | Переменная | По умолчанию | Что это |
 |---|---|---|
-| `RAG_MODEL` | `nvidia/nemotron-3-super-120b-a12b:free` | модель ответов, памяти и сжатия; допустимо: `google/gemma-4-31b-it:free`, `qwen/qwen3.8-27b:free`, `deepseek-flash`, `deepseek-v4-pro`, `local` (qwen3.5:9b через llmcli, см. «Локальная модель») |
+| `RAG_MODEL` | `nvidia/nemotron-3-super-120b-a12b:free` | модель ответов, памяти и сжатия; допустимо: `google/gemma-4-31b-it:free`, `qwen/qwen3.8-27b:free`, `deepseek-flash`, `deepseek-v4-pro`, `local` (локальная модель через llmcli, см. «Локальная модель») |
+| `LLMCLI_MODEL` | `qwen3.5:9b` | локальная модель doc-index (тег Ollama) |
 | `LLMCLI_CTX` | максимум модели | контекстное окно локальной модели в токенах |
 | `RERANK_MODEL` | `B-A-M-N/qwen3-reranker-0.6b-fp16` | реранкер в Ollama |
 | `RETRIEVAL_QUERY` | `hyde` | что превращать в вектор: `hyde`, `en` (запрос по-английски), `raw` (реплика как есть) |

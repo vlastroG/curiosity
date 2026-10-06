@@ -1,7 +1,7 @@
 package llm
 
 // Модель задаётся один раз переменной RAG_MODEL. Провайдер -- из id:
-// local -- локальная qwen3.5:9b через llmcli, deepseek-* идёт в DeepSeek,
+// local -- локальная модель через llmcli (по умолчанию qwen3.5:9b), deepseek-* идёт в DeepSeek,
 // остальное -- в OpenRouter.
 
 import (
@@ -41,7 +41,7 @@ var Models = []Model{
 	{ID: "deepseek-flash", Title: "DeepSeek Flash"},
 	{ID: "deepseek-v4-pro", Title: "DeepSeek V4 Pro"},
 	// бюджет не урезан: llmcli сам ограничивает ответ контекстом модели
-	{ID: LocalModel, Title: "qwen3.5:9b (локально, llmcli)", Free: true},
+	{ID: LocalModel, Title: "Локальная модель (llmcli)", Free: true},
 }
 
 // LocalModel -- id локальной модели в RAG_MODEL.

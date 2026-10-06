@@ -1,4 +1,4 @@
-// llmcli -- CLI для локальной модели qwen3.5:9b, запущенной в Ollama.
+// llmcli -- CLI для локальной модели в Ollama (по умолчанию qwen3.5:9b, иначе LLMCLI_MODEL).
 //
 //	llmcli ask [флаги] "вопрос"   -- спросить модель, ответ печатается по мере генерации
 //	llmcli serve                  -- HTTP-сервер в формате OpenAI для других сервисов
@@ -17,7 +17,18 @@ import (
 	"time"
 )
 
-const model = "qwen3.5:9b"
+const defaultModel = "qwen3.5:9b"
+
+// model -- модель в Ollama: LLMCLI_MODEL или defaultModel.
+var model = defaultModel
+
+// modelName -- модель из окружения. getenv -- os.Getenv.
+func modelName(getenv func(string) string) string {
+	if m := strings.TrimSpace(getenv("LLMCLI_MODEL")); m != "" {
+		return m
+	}
+	return defaultModel
+}
 
 // optionNames -- флаги ask, которые уходят в options Ollama, и их имена там.
 var optionNames = map[string]string{
@@ -32,7 +43,7 @@ var optionNames = map[string]string{
 }
 
 const limitations = `Ограничения:
-  - небольшая модель (9B): уступает облачным моделям, может выдумывать факты
+  - небольшая локальная модель (qwen3.5:9b -- 9B): уступает облачным моделям, может выдумывать факты
   - нет доступа к интернету; знания заканчиваются датой обучения
   - каждый ask независим: модель не помнит прошлые вопросы
   - контекстное окно ограничено (--ctx); длинный ввод обрезается
@@ -46,6 +57,7 @@ func main() {
 	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
 		stdin = os.Stdin
 	}
+	model = modelName(os.Getenv)
 	url := os.Getenv("OLLAMA_URL")
 	if url == "" {
 		url = "http://ollama:11434"
@@ -155,7 +167,7 @@ func ask(ctx context.Context, c *client, args []string, stdin io.Reader, stdout,
 		return err
 	}
 	if _, err := c.show(ctx, model); errors.Is(err, errNotFound) {
-		fmt.Fprintf(stderr, "скачиваю %s (один раз, ~6.6 ГБ)...\n", model)
+		fmt.Fprintf(stderr, "скачиваю %s (один раз)...\n", model)
 		if err := c.pull(ctx, model); err != nil {
 			return fmt.Errorf("загрузка модели: %w", err)
 		}

@@ -123,6 +123,21 @@ func TestServeCompletions(t *testing.T) {
 	}
 }
 
+func TestModelFromEnv(t *testing.T) {
+	if m := modelName(func(string) string { return "" }); m != defaultModel {
+		t.Errorf("по умолчанию %q", m)
+	}
+	t.Cleanup(func() { model = defaultModel })
+	model = modelName(func(string) string { return "llama3.1:8b" })
+	srv, got := fakeOllama(t, true)
+	if code := run(context.Background(), newClient(srv.URL), []string{"ask", "привет"}, nil, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if got.Model != "llama3.1:8b" {
+		t.Errorf("модель в запросе = %q", got.Model)
+	}
+}
+
 func TestServeNotReady(t *testing.T) {
 	srv := httptest.NewServer((&server{}).handler())
 	t.Cleanup(srv.Close)
