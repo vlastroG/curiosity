@@ -20,7 +20,8 @@ import (
 
 type server struct {
 	c      *client
-	numCtx int // контекстное окно; 0 до готовности -- максимум модели
+	numCtx int       // контекстное окно по умолчанию; 0 до готовности -- максимум модели
+	info   modelInfo // сведения о модели; info.ContextLength -- её максимум
 	ready  atomic.Bool
 }
 
@@ -59,7 +60,8 @@ func (s *server) prepare(ctx context.Context) {
 			}
 		}
 		if err == nil {
-			if s.numCtx <= 0 {
+			s.info = info
+			if s.numCtx <= 0 || (info.ContextLength > 0 && s.numCtx > info.ContextLength) {
 				s.numCtx = info.ContextLength
 			}
 			s.ready.Store(true)
@@ -84,6 +86,17 @@ func (s *server) handler() http.Handler {
 		}
 		io.WriteString(w, "ok")
 	})
+	mux.HandleFunc("GET /v1/info", func(w http.ResponseWriter, r *http.Request) {
+		out := map[string]any{"model": model, "ready": s.ready.Load()}
+		if s.ready.Load() {
+			out["parameterSize"] = s.info.ParameterSize
+			out["quantization"] = s.info.Quantization
+			out["contextLength"] = s.info.ContextLength
+			out["numCtx"] = s.numCtx
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+	})
 	mux.HandleFunc("POST /v1/chat/completions", s.complete)
 	return mux
 }
@@ -94,17 +107,29 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Messages  []message `json:"messages"`
-		MaxTokens int       `json:"max_tokens"`
+		Messages    []message `json:"messages"`
+		MaxTokens   int       `json:"max_tokens"`
+		Temperature *float64  `json:"temperature"`
+		NumCtx      int       `json:"num_ctx"` // расширение: контекстное окно на запрос
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	numCtx := s.numCtx
+	if req.NumCtx > 0 {
+		numCtx = req.NumCtx
+		if limit := s.info.ContextLength; limit > 0 && numCtx > limit {
+			numCtx = limit
+		}
+	}
 	// ответ вместе с запросом всё равно ограничен контекстом
-	opts := map[string]any{"num_ctx": s.numCtx}
+	opts := map[string]any{"num_ctx": numCtx}
 	if req.MaxTokens > 0 {
-		opts["num_predict"] = min(req.MaxTokens, s.numCtx)
+		opts["num_predict"] = min(req.MaxTokens, numCtx)
+	}
+	if req.Temperature != nil {
+		opts["temperature"] = *req.Temperature
 	}
 	var out bytes.Buffer
 	st, err := s.c.chat(r.Context(), chatRequest{Model: model, Messages: req.Messages, Options: opts}, &out)

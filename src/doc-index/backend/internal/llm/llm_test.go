@@ -40,6 +40,13 @@ func TestChatToolCalls(t *testing.T) {
 	if fn := tools[0].(map[string]any)["function"].(map[string]any); fn["name"] != "crypto_summary" {
 		t.Errorf("инструменты ушли как %v", tools)
 	}
+	// не заданные параметры генерации не уходят вовсе
+	if _, ok := got["temperature"]; ok {
+		t.Errorf("temperature ушла: %v", got)
+	}
+	if _, ok := got["num_ctx"]; ok {
+		t.Errorf("num_ctx ушёл: %v", got)
+	}
 }
 
 func TestChatLocalWithoutKey(t *testing.T) {
@@ -47,12 +54,19 @@ func TestChatLocalWithoutKey(t *testing.T) {
 		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "" {
 			t.Errorf("запрос %s, Authorization %q", r.URL.Path, r.Header.Get("Authorization"))
 		}
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["temperature"] != 0.3 || body["num_ctx"] != 8192.0 {
+			t.Errorf("параметры генерации: %v", body)
+		}
 		w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"ок"}}]}`))
 	}))
 	defer server.Close()
 
+	temp := 0.3
 	resp, err := New(0).Chat(context.Background(), Local(server.URL), Request{
 		Model: LocalModel, Messages: []Message{{Role: RoleUser, Content: "привет"}},
+		Temperature: &temp, NumCtx: 8192,
 	})
 	if err != nil || resp.Text != "ок" {
 		t.Fatalf("%+v %v", resp, err)

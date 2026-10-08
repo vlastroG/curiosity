@@ -28,6 +28,7 @@ func fakeOllama(t *testing.T, pulled bool) (*httptest.Server, *chatRequest) {
 			pulled = true
 			io.WriteString(w, "{\"status\":\"pulling manifest\"}\n{\"status\":\"success\"}\n")
 		case "/api/chat":
+			*got = chatRequest{}
 			json.NewDecoder(r.Body).Decode(got)
 			io.WriteString(w, "{\"message\":{\"content\":\"При\"},\"done\":false}\n"+
 				"{\"message\":{\"content\":\"вет\"},\"done\":false}\n"+
@@ -120,6 +121,39 @@ func TestServeCompletions(t *testing.T) {
 	// контекст -- максимум модели, длина ответа им ограничена; JSON-числа -- float64
 	if got.Options["num_ctx"] != 262144.0 || got.Options["num_predict"] != 262144.0 || got.Think || len(got.Messages) != 2 {
 		t.Errorf("запрос к Ollama = %+v", got)
+	}
+
+	// параметры запроса: температура и своё окно, ответ ограничен этим окном
+	body = `{"max_tokens":9000,"temperature":0.2,"num_ctx":8192,"messages":[{"role":"user","content":"привет"}]}`
+	resp2, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if got.Options["num_ctx"] != 8192.0 || got.Options["num_predict"] != 8192.0 || got.Options["temperature"] != 0.2 {
+		t.Errorf("options = %+v", got.Options)
+	}
+
+	// окно больше максимума модели срезается
+	body = `{"num_ctx":999999,"messages":[{"role":"user","content":"привет"}]}`
+	resp3, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp3.Body.Close()
+	if got.Options["num_ctx"] != 262144.0 || got.Options["temperature"] != nil {
+		t.Errorf("options = %+v", got.Options)
+	}
+
+	resp4, err := http.Get(srv.URL + "/v1/info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp4.Body.Close()
+	var info map[string]any
+	json.NewDecoder(resp4.Body).Decode(&info)
+	if info["model"] != model || info["quantization"] != "Q4_K_M" || info["contextLength"] != 262144.0 || info["ready"] != true {
+		t.Errorf("info = %+v", info)
 	}
 }
 

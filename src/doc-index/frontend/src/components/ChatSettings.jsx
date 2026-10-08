@@ -8,7 +8,7 @@ const QUERY = {
 };
 
 // ChatSettings -- свёрнутая панель настроек чата: модели (только чтение,
-// задаются в .env), поиск и сжатие (сохраняются в чат на сервере).
+// задаются в .env), поиск, генерация и сжатие (сохраняются в чат на сервере).
 export default function ChatSettings({ chat, rag, onSave }) {
   const [draft, setDraft] = useState(chat.settings);
   const [busy, setBusy] = useState(false);
@@ -36,6 +36,24 @@ export default function ChatSettings({ chat, rag, onSave }) {
       <span className="setting-hint">{hint}</span>
     </label>
   );
+  // необязательное число: пустое поле -- значение модели (null или 0 на сервере)
+  const opt = (key, label, hint, step, min, max, placeholder) => (
+    <label className="setting" title={hint}>
+      <span className="setting-label">{label}</span>
+      <input
+        type="number"
+        step={step}
+        min={min}
+        max={max}
+        placeholder={placeholder}
+        value={draft[key] === null || draft[key] === undefined || draft[key] === 0 ? '' : draft[key]}
+        onChange={(e) => set({ [key]: e.target.value })}
+      />
+      <span className="setting-hint">{hint}</span>
+    </label>
+  );
+
+  const local = rag.local ? rag.localInfo || {} : null;
 
   return (
     <details className="settings chat-settings">
@@ -48,7 +66,15 @@ export default function ChatSettings({ chat, rag, onSave }) {
           <div className="settings-title">Модели · задаются в .env</div>
           <div className="setting wide">
             <span className="setting-label">ответы, план, сжатие (RAG_MODEL)</span>
-            <code>{rag.model || 'не настроена'}</code>
+            <code>{local?.model || rag.model || 'не настроена'}</code>
+            {local && !local.error && local.ready && (
+              <span className="setting-hint">
+                локально через llmcli · квантование {local.quantization} · {local.parameterSize} параметров · контекст до{' '}
+                {fmtNum(local.contextLength)} токенов
+              </span>
+            )}
+            {local && !local.error && !local.ready && <span className="setting-hint">llmcli: модель ещё скачивается</span>}
+            {local?.error && <span className="setting-hint bad-text">{local.error}</span>}
             {rag.budget > 0 && <span className="setting-hint">бюджет вывода {fmtNum(rag.budget)} токенов</span>}
           </div>
           <div className="setting">
@@ -84,6 +110,36 @@ export default function ChatSettings({ chat, rag, onSave }) {
               <option value="fused">косинус + реранкер (RRF)</option>
             </select>
           </label>
+        </div>
+        <div className="settings-group">
+          <div className="settings-title">Генерация</div>
+          {opt('temperature', 'температура', '0 — точнее и однообразнее, 1–2 — разнообразнее; пусто — значение модели', 0.1, 0, 2, 'модели')}
+          {opt(
+            'maxTokens',
+            'предел ответа',
+            `токенов на один ответ модели; пусто — бюджет ${rag.budget ? fmtNum(rag.budget) : 'модели'}`,
+            100,
+            16,
+            100000,
+            'бюджет'
+          )}
+          {local ? (
+            opt(
+              'ctx',
+              'контекстное окно',
+              'смена окна перезагружает модель в Ollama; меньше — быстрее и помещается в видеопамять',
+              1024,
+              2048,
+              local.contextLength || 262144,
+              local.numCtx ? fmtNum(local.numCtx) : 'llmcli'
+            )
+          ) : (
+            <div className="setting">
+              <span className="setting-label">контекстное окно</span>
+              <code>{rag.context ? `${fmtNum(rag.context)} токенов` : 'неизвестно'}</code>
+              <span className="setting-hint">задаётся провайдером</span>
+            </div>
+          )}
         </div>
         <div className="settings-group">
           <div className="settings-title">Память</div>

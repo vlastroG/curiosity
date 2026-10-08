@@ -28,6 +28,7 @@ const (
 type Provider struct {
 	ID           string
 	Title        string
+	BaseURL      string // адрес llmcli -- для сведений о локальной модели
 	Endpoint     string
 	APIKey       string
 	ExtraHeaders map[string]string
@@ -64,10 +65,12 @@ func OpenRouter(apiKey, appURL, appTitle string) Provider {
 
 // Local -- локальная модель через llmcli serve (src/llm-cli): тот же протокол, без ключа.
 func Local(url string) Provider {
+	url = strings.TrimRight(url, "/")
 	return Provider{
 		ID:       ProviderLocal,
 		Title:    "llmcli (локальная модель)",
-		Endpoint: strings.TrimRight(url, "/") + "/v1/chat/completions",
+		BaseURL:  url,
+		Endpoint: url + "/v1/chat/completions",
 	}
 }
 
@@ -110,6 +113,10 @@ type Request struct {
 	Messages  []Message
 	Tools     []Tool
 	MaxTokens int
+	// Temperature -- nil: значение модели
+	Temperature *float64
+	// NumCtx -- контекстное окно; расширение llmcli, облачным провайдерам не передаётся
+	NumCtx int
 }
 
 // Usage -- расход токенов.
@@ -272,11 +279,13 @@ func short(raw []byte) string {
 }
 
 type wireRequest struct {
-	Model     string     `json:"model"`
-	Messages  []Message  `json:"messages"`
-	Tools     []wireTool `json:"tools,omitempty"`
-	MaxTokens int        `json:"max_tokens,omitempty"`
-	Stream    bool       `json:"stream"`
+	Model       string     `json:"model"`
+	Messages    []Message  `json:"messages"`
+	Tools       []wireTool `json:"tools,omitempty"`
+	MaxTokens   int        `json:"max_tokens,omitempty"`
+	Temperature *float64   `json:"temperature,omitempty"`
+	NumCtx      int        `json:"num_ctx,omitempty"`
+	Stream      bool       `json:"stream"`
 }
 
 type wireTool struct {
@@ -289,7 +298,8 @@ type wireTool struct {
 }
 
 func wire(req Request) wireRequest {
-	out := wireRequest{Model: req.Model, Messages: req.Messages, MaxTokens: req.MaxTokens}
+	out := wireRequest{Model: req.Model, Messages: req.Messages, MaxTokens: req.MaxTokens,
+		Temperature: req.Temperature, NumCtx: req.NumCtx}
 	for _, tool := range req.Tools {
 		var w wireTool
 		w.Type = "function"

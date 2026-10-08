@@ -253,10 +253,11 @@ const compressSystem = `Ты сжимаешь старую часть бесед
 type Compressor struct{ LLM LLM }
 
 // Compress -- новая сводка из прежней и сжимаемых сообщений.
-func (c Compressor) Compress(ctx context.Context, summary string, turns []Turn) (string, error) {
+// g -- параметры чата: то же окно, что у ответов, чтобы Ollama не перезагружала модель.
+func (c Compressor) Compress(ctx context.Context, summary string, turns []Turn, g Gen) (string, error) {
 	var b strings.Builder
 	writeDialogue(&b, summary, turns)
-	text, err := c.LLM.ask(ctx, compressSystem, b.String())
+	text, err := c.LLM.With(g).ask(ctx, compressSystem, b.String())
 	if err != nil {
 		return "", err
 	}

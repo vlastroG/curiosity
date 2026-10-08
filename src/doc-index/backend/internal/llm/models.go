@@ -1,7 +1,7 @@
 package llm
 
 // Модель задаётся один раз переменной RAG_MODEL. Провайдер -- из id:
-// local -- локальная модель через llmcli (по умолчанию qwen3.5:9b), deepseek-* идёт в DeepSeek,
+// local -- локальная модель через llmcli (по умолчанию qwen3.5:9b-q4_K_M), deepseek-* идёт в DeepSeek,
 // остальное -- в OpenRouter.
 
 import (
@@ -23,6 +23,8 @@ type Model struct {
 	Free  bool   `json:"free"`
 	// MaxOutput -- потолок вывода модели (OpenRouter /api/v1/models); 0 -- не меньше MaxTokens
 	MaxOutput int `json:"maxOutput,omitempty"`
+	// Context -- контекстное окно провайдера; 0 -- узнать у OpenRouter при запуске
+	Context int `json:"context,omitempty"`
 }
 
 // Budget -- бюджет вывода для модели: MaxTokens, но не выше её потолка.
@@ -38,8 +40,8 @@ var Models = []Model{
 	{ID: DefaultModel, Title: "Nemotron 3 Super (free)", Free: true},
 	{ID: "google/gemma-4-31b-it:free", Title: "Gemma 4 31B (free)", Free: true, MaxOutput: 32_768},
 	{ID: "qwen/qwen3.8-27b:free", Title: "Qwen 3.8 27B (free)", Free: true},
-	{ID: "deepseek-flash", Title: "DeepSeek Flash"},
-	{ID: "deepseek-v4-pro", Title: "DeepSeek V4 Pro"},
+	{ID: "deepseek-flash", Title: "DeepSeek Flash", Context: 1_000_000},
+	{ID: "deepseek-v4-pro", Title: "DeepSeek V4 Pro", Context: 1_000_000},
 	// бюджет не урезан: llmcli сам ограничивает ответ контекстом модели
 	{ID: LocalModel, Title: "Локальная модель (llmcli)", Free: true},
 }

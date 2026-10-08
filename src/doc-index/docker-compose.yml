@@ -29,7 +29,7 @@ services:
         condition: service_healthy
         required: false
 
-  # локальная модель qwen3.5:9b через src/llm-cli; включается RAG_MODEL=local
+  # локальная модель qwen3.5:9b-q4_K_M через src/llm-cli; включается RAG_MODEL=local
   # в корневом .env и запуском с --profile local
   llmcli:
     build: ../llm-cli

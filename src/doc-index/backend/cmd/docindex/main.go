@@ -103,8 +103,9 @@ type app struct {
 	tuned    bool          // настройки поиска взяты из подбора experiment
 	chats    *chat.Store
 
-	llm    rag.LLM
-	llmErr error
+	llm      rag.LLM
+	llmErr   error
+	llmModel llm.Model
 }
 
 func setup() (*app, error) {
@@ -143,7 +144,7 @@ func setup() (*app, error) {
 	m, provider, err := llm.ResolveModel(os.Getenv("RAG_MODEL"), os.Getenv)
 	a.llm = rag.LLM{Client: llm.New(durationEnv("LLM_TIMEOUT", 3*time.Minute)), Provider: provider, Model: m.ID,
 		MaxTokens: m.Budget()}
-	a.llmErr = err
+	a.llmErr, a.llmModel = err, m
 	return a, nil
 }
 
@@ -198,6 +199,30 @@ func (a *app) service(ag *rag.Agent) *chat.Service {
 	return &chat.Service{Store: a.chats, Agent: ag, Compressor: rag.Compressor{LLM: a.llm}}
 }
 
+// llmContext -- контекстное окно облачной модели для настроек чата: из каталога
+// или у OpenRouter. 0 -- неизвестно (или модель локальная: окно знает llmcli).
+func (a *app) llmContext(ctx context.Context) int {
+	if a.llmErr != nil || a.llm.Provider.ID != llm.ProviderOpenRouter || a.llmModel.Context > 0 {
+		return a.llmModel.Context
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	n, err := llm.OpenRouterContext(ctx, a.llmModel.ID)
+	if err != nil {
+		log.Printf("контекст модели не узнан: %v", err)
+	}
+	return n
+}
+
+// localInfo -- сведения о локальной модели от llmcli; nil, если модель облачная.
+func (a *app) localInfo() func(context.Context) (map[string]any, error) {
+	if a.llm.Provider.ID != llm.ProviderLocal {
+		return nil
+	}
+	base := a.llm.Provider.BaseURL
+	return func(ctx context.Context) (map[string]any, error) { return llm.LocalInfo(ctx, base) }
+}
+
 func serve(ctx context.Context) error {
 	a, err := setup()
 	if err != nil {
@@ -220,7 +245,7 @@ func serve(ctx context.Context) error {
 		},
 		EvalPath: a.evalPath, Params: a.params, StaticDir: env("STATIC_DIR", "./web"),
 		Agent: ag, Chats: a.service(ag), ChatDefaults: a.settings, LLMBudget: a.llm.MaxTokens,
-		LLMError: a.llmErr, Tuned: a.tuned,
+		LLMError: a.llmErr, Tuned: a.tuned, LLMContext: a.llmContext(ctx), LocalInfo: a.localInfo(),
 	})
 	addr := ":" + env("PORT", "8080")
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

@@ -1,4 +1,4 @@
-# ollama -- модель qwen3.5:9b на видеокарте NVIDIA; веса в томе ollama-models
+# ollama -- модель qwen3.5:9b-q4_K_M на видеокарте NVIDIA; веса в томе ollama-models
 # llmcli -- CLI, запускается по требованию: docker compose run --rm llmcli ask "..."
 name: llm-cli
 
