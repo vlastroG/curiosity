@@ -42,11 +42,13 @@ func (f *fakeAgent) Reply(_ context.Context, c rag.Conversation, text string, st
 
 type fakeSummarizer struct {
 	calls [][]rag.Turn
+	gens  []rag.Gen
 	err   error
 }
 
-func (f *fakeSummarizer) Compress(_ context.Context, summary string, turns []rag.Turn) (string, error) {
+func (f *fakeSummarizer) Compress(_ context.Context, summary string, turns []rag.Turn, g rag.Gen) (string, error) {
 	f.calls = append(f.calls, turns)
+	f.gens = append(f.gens, g)
 	if f.err != nil {
 		return "", f.err
 	}
@@ -181,7 +183,9 @@ func TestCompressionAfterN(t *testing.T) {
 	agent := &fakeAgent{topic: "т"}
 	sum := &fakeSummarizer{}
 	svc := &chat.Service{Store: cs, Agent: agent, Compressor: sum}
-	c, _ := cs.Create(ctx, settings(6))
+	st := settings(6)
+	st.Gen = rag.Gen{Ctx: 8192}
+	c, _ := cs.Create(ctx, st)
 	var got *chat.Chat
 	for i := 1; i <= 3; i++ { // 6 сообщений -- ещё не больше порога
 		got, _ = svc.Send(ctx, c.ID, fmt.Sprintf("реплика %d", i))
@@ -192,6 +196,9 @@ func TestCompressionAfterN(t *testing.T) {
 	got, _ = svc.Send(ctx, c.ID, "реплика 4") // 8 > 6: сжимаются первые 4
 	if len(sum.calls) != 1 || len(sum.calls[0]) != 4 || got.SummarizedUpto != 4 || got.Summary != "сводка 4 сообщений" {
 		t.Fatalf("сжатие: вызовов %d, upto %d, %q", len(sum.calls), got.SummarizedUpto, got.Summary)
+	}
+	if sum.gens[0].Ctx != 8192 {
+		t.Errorf("сжатие без параметров чата: %+v", sum.gens[0])
 	}
 	if len(got.Messages) != 8 {
 		t.Fatal("история в интерфейсе должна остаться целиком")

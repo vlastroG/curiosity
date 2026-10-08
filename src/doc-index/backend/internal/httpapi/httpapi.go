@@ -52,7 +52,10 @@ type Config struct {
 	ChatDefaults chat.Settings // настройки нового чата
 	LLMBudget    int           // бюджет вывода модели ответов
 	LLMError     error         // модель ответов недоступна (нет ключа и т. п.)
-	Tuned        bool          // настройки поиска подобраны командой experiment
+	LLMContext   int           // контекстное окно облачной модели; 0 -- неизвестно
+	// LocalInfo -- сведения о локальной модели от llmcli; nil -- модель облачная
+	LocalInfo func(ctx context.Context) (map[string]any, error)
+	Tuned     bool // настройки поиска подобраны командой experiment
 }
 
 // API -- обработчики.
@@ -177,6 +180,17 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 		ragInfo["defaults"] = a.ChatDefaults
 		ragInfo["budget"] = a.LLMBudget
 		ragInfo["tuned"] = a.Tuned
+		ragInfo["context"] = a.LLMContext
+	}
+	if a.LocalInfo != nil {
+		ragInfo["local"] = true
+		lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		info, err := a.LocalInfo(lctx)
+		cancel()
+		if err != nil {
+			info = map[string]any{"error": "llmcli недоступен: " + err.Error()}
+		}
+		ragInfo["localInfo"] = info
 	}
 	if a.LLMError != nil {
 		ragInfo["error"] = a.LLMError.Error()
@@ -253,6 +267,13 @@ func (a *API) requireGPU(ctx context.Context, model string) error {
 	a.gpuMu.Unlock()
 	if ok {
 		return nil
+	}
+	// с локальной моделью ответов Ollama выгружает эмбеддинги и реранкер,
+	// чтобы поместить её: выгруженная модель -- не ошибка, проверим в другой раз
+	if a.LocalInfo != nil {
+		if p, err := a.Ollama.Where(ctx, model); err == nil && !p.Loaded {
+			return nil
+		}
 	}
 	if _, err := a.Ollama.RequireGPU(ctx, model); err != nil {
 		return err
