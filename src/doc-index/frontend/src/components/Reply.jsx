@@ -11,8 +11,8 @@ export function Waiting({ text }) {
 }
 
 // Reply -- ответ эксперта: текст со сносками, строка источников (всегда)
-// и свёрнутый блок «Как искали».
-export default function Reply({ m, books }) {
+// и свёрнутый блок «Как искали». plain -- RAG выключен: только текст.
+export default function Reply({ m, books, plain }) {
   const [open, setOpen] = useState(false);
   const [lit, setLit] = useState(0);
   const ref = useRef(null);
@@ -24,6 +24,22 @@ export default function Reply({ m, books }) {
     setLit(n);
     setTimeout(() => ref.current?.querySelector(`[data-source="${n}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
   };
+
+  if (plain) {
+    return (
+      <div className="reply">
+        {m.error ? (
+          <div className="error">{m.error}</div>
+        ) : (
+          <div className="answer-text">
+            {m.text.split(/\n{2,}/).map((para, i) => (
+              <p key={i}>{para}</p>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="reply">

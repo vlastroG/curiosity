@@ -135,7 +135,7 @@ func (a *API) putState(w http.ResponseWriter, r *http.Request) {
 
 // sendMessage -- реплика пользователя; в ответ -- чат целиком.
 func (a *API) sendMessage(w http.ResponseWriter, r *http.Request) {
-	if a.Agent == nil || a.LLMError != nil {
+	if (a.Agent == nil && !a.NoRAG) || a.LLMError != nil {
 		msg := "модель ответов не настроена"
 		if a.LLMError != nil {
 			msg = a.LLMError.Error()
@@ -154,17 +154,23 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if err := a.Searcher.Refresh(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if len(a.Searcher.Chunks(a.Agent.Variant)) == 0 {
-		writeError(w, http.StatusConflict, search.ErrEmptyIndex)
-		return
+	if !a.NoRAG {
+		if err := a.Searcher.Refresh(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if len(a.Searcher.Chunks(a.Agent.Variant)) == 0 {
+			writeError(w, http.StatusConflict, search.ErrEmptyIndex)
+			return
+		}
 	}
 	c, err := a.Chats.Send(r.Context(), id, req.Text)
 	if err != nil {
 		chatError(w, err)
+		return
+	}
+	if a.NoRAG {
+		writeJSON(w, http.StatusOK, map[string]any{"chat": c})
 		return
 	}
 	// только GPU: эмбеддинги и реранкер загружаются первыми запросами

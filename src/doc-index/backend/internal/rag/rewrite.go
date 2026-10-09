@@ -65,6 +65,14 @@ func (m LLM) With(g Gen) LLM {
 }
 
 func (m LLM) ask(ctx context.Context, system, user string) (string, error) {
+	return m.chat(ctx, []llm.Message{
+		{Role: llm.RoleSystem, Content: system},
+		{Role: llm.RoleUser, Content: user},
+	})
+}
+
+// chat -- запрос с готовыми сообщениями, с бюджетом и параметрами чата.
+func (m LLM) chat(ctx context.Context, msgs []llm.Message) (string, error) {
 	budget := m.MaxTokens
 	if budget <= 0 {
 		budget = llm.MaxTokens
@@ -82,10 +90,7 @@ func (m LLM) ask(ctx context.Context, system, user string) (string, error) {
 		MaxTokens:   budget,
 		Temperature: m.Gen.Temperature,
 		NumCtx:      numCtx,
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: system},
-			{Role: llm.RoleUser, Content: user},
-		},
+		Messages:    msgs,
 	})
 	if err != nil {
 		return "", err

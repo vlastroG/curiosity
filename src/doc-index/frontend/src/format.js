@@ -286,18 +286,16 @@ export function citedNumbers(text) {
   return new Set(splitCitations(text).filter((s) => s.cite).map((s) => s.cite));
 }
 
-// settingsLine -- настройки чата кратко, для свёрнутой панели.
-export function settingsLine(s) {
+// settingsLine -- настройки чата кратко, для свёрнутой панели; off -- RAG выключен.
+export function settingsLine(s, off = false) {
   if (!s) return '';
   const q = { hyde: 'HyDE', en: 'перевод', raw: 'как есть' }[s.query] || s.query;
   const gen = [];
   if (s.temperature !== undefined && s.temperature !== null) gen.push(`t=${s.temperature}`);
   if (s.maxTokens > 0) gen.push(`≤${s.maxTokens} ток.`);
   if (s.ctx > 0) gen.push(`ctx ${s.ctx}`);
-  return (
-    `поиск: ${q}, top-${s.kBefore} → ${s.kAfter}, косинус ≥ ${s.simMin}, реранкер ≥ ${s.relMin} · сжатие после ${s.compressAfter} сообщений` +
-    (gen.length ? ` · ${gen.join(', ')}` : '')
-  );
+  const search = off ? '' : `поиск: ${q}, top-${s.kBefore} → ${s.kAfter}, косинус ≥ ${s.simMin}, реранкер ≥ ${s.relMin} · `;
+  return `${search}сжатие после ${s.compressAfter} сообщений` + (gen.length ? ` · ${gen.join(', ')}` : '');
 }
 
 // isFresh -- пункт памяти, появившийся, после реплики seq (подсветка «новое»).

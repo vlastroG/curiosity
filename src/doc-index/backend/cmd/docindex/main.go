@@ -103,6 +103,7 @@ type app struct {
 	tuned    bool          // настройки поиска взяты из подбора experiment
 	chats    *chat.Store
 	users    []httpapi.User // логины интерфейса; первый -- владелец чатов из CLI
+	noRAG    bool           // RAG=off: чат с моделью без поиска по книгам
 
 	llm      rag.LLM
 	llmErr   error
@@ -142,6 +143,7 @@ func setup() (*app, error) {
 	if a.chats, err = chat.Open(st.DB()); err != nil {
 		return nil, err
 	}
+	a.noRAG = strings.EqualFold(os.Getenv("RAG"), "off")
 	a.users, err = httpapi.ParseUsers(os.Getenv("DOCINDEX_USERS"), env("DOCINDEX_USER", "twain"), os.Getenv("DOCINDEX_PASSWORD"))
 	if err != nil {
 		return nil, err
@@ -208,6 +210,10 @@ func (a *app) agent(s *search.Searcher) *rag.Agent {
 func (a *app) owner() string { return a.users[0].Name }
 
 func (a *app) service(ag *rag.Agent) *chat.Service {
+	if a.noRAG {
+		return &chat.Service{Store: a.chats, Agent: rag.Plain{LLM: a.llm},
+			Compressor: rag.Compressor{LLM: a.llm, System: rag.PlainCompressSystem}}
+	}
 	return &chat.Service{Store: a.chats, Agent: ag, Compressor: rag.Compressor{LLM: a.llm}}
 }
 
@@ -249,6 +255,10 @@ func serve(ctx context.Context) error {
 
 	s := a.searcher()
 	ag := a.agent(s)
+	svc := a.service(ag)
+	if a.noRAG {
+		ag = nil // без поиска API не трогает индекс, эмбеддинги и реранкер
+	}
 	handler := httpapi.New(httpapi.Config{
 		Store: a.store, Searcher: s, Ollama: a.ollama, OllamaURL: a.ollama.URL, Jobs: jobs,
 		Index: func(ctx context.Context, rebuild bool, emit func(index.Event)) error {
@@ -256,7 +266,7 @@ func serve(ctx context.Context) error {
 			return err
 		},
 		EvalPath: a.evalPath, Params: a.params, StaticDir: env("STATIC_DIR", "./web"),
-		Agent: ag, Chats: a.service(ag), ChatDefaults: a.settings, LLMBudget: a.llm.MaxTokens,
+		Agent: ag, Chats: svc, NoRAG: a.noRAG, Model: a.llm.Model, ChatDefaults: a.settings, LLMBudget: a.llm.MaxTokens,
 		LLMError: a.llmErr, Tuned: a.tuned, LLMContext: a.llmContext(ctx), LocalInfo: a.localInfo(),
 	})
 	// в домашней сети (docker-compose.lan.yml) без пароля не стартуем
@@ -278,8 +288,13 @@ func serve(ctx context.Context) error {
 		_ = srv.Shutdown(shutdown)
 	}()
 	st := a.settings
-	log.Printf("слушаю %s; книг %d; эмбеддинги %s, реранкер %s; top-K до %d, косинус ≥ %.2f, реранкер ≥ %.2f, top-K после %d; сжатие после %d; ответы: %s",
-		addr, len(a.books), experiment.Model, a.reranker.Model, st.KBefore, st.SimMin, st.RelMin, st.KAfter, st.CompressAfter, a.llm.Model)
+	if a.noRAG {
+		log.Printf("слушаю %s; RAG выключен (RAG=off): чат с моделью без поиска; сжатие после %d; ответы: %s",
+			addr, st.CompressAfter, a.llm.Model)
+	} else {
+		log.Printf("слушаю %s; книг %d; эмбеддинги %s, реранкер %s; top-K до %d, косинус ≥ %.2f, реранкер ≥ %.2f, top-K после %d; сжатие после %d; ответы: %s",
+			addr, len(a.books), experiment.Model, a.reranker.Model, st.KBefore, st.SimMin, st.RelMin, st.KAfter, st.CompressAfter, a.llm.Model)
+	}
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

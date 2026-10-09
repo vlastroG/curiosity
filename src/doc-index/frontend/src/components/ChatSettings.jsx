@@ -54,18 +54,19 @@ export default function ChatSettings({ chat, rag, onSave }) {
   );
 
   const local = rag.local ? rag.localInfo || {} : null;
+  const off = !!rag.off; // RAG выключен: ни поиска, ни эмбеддингов
 
   return (
     <details className="settings chat-settings">
       <summary>
         <span className="settings-summary-title">Настройки чата</span>
-        <span className="muted small">{settingsLine(chat.settings)}</span>
+        <span className="muted small">{settingsLine(chat.settings, off)}</span>
       </summary>
       <div className="settings-row">
         <div className="settings-group readonly">
           <div className="settings-title">Модели · задаются в .env</div>
           <div className="setting wide">
-            <span className="setting-label">ответы, план, сжатие (RAG_MODEL)</span>
+            <span className="setting-label">{off ? 'ответы и сжатие (RAG_MODEL)' : 'ответы, план, сжатие (RAG_MODEL)'}</span>
             <code>{local?.model || rag.model || 'не настроена'}</code>
             {local && !local.error && local.ready && (
               <span className="setting-hint">
@@ -77,40 +78,51 @@ export default function ChatSettings({ chat, rag, onSave }) {
             {local?.error && <span className="setting-hint bad-text">{local.error}</span>}
             {rag.budget > 0 && <span className="setting-hint">бюджет вывода {fmtNum(rag.budget)} токенов</span>}
           </div>
-          <div className="setting">
-            <span className="setting-label">эмбеддинги</span>
-            <code>{rag.embedModel}</code>
-          </div>
-          <div className="setting">
-            <span className="setting-label">реранкер</span>
-            <code>{rag.reranker}</code>
-          </div>
+          {off ? (
+            <div className="setting wide">
+              <span className="setting-label">поиск по книгам</span>
+              <code>выключен (RAG=off)</code>
+            </div>
+          ) : (
+            <>
+              <div className="setting">
+                <span className="setting-label">эмбеддинги</span>
+                <code>{rag.embedModel}</code>
+              </div>
+              <div className="setting">
+                <span className="setting-label">реранкер</span>
+                <code>{rag.reranker}</code>
+              </div>
+            </>
+          )}
         </div>
-        <div className="settings-group">
-          <div className="settings-title">Поиск</div>
-          <label className="setting wide" title="Что превращать в вектор для поиска">
-            <span className="setting-label">запрос для поиска</span>
-            <select value={draft.query} onChange={(e) => set({ query: e.target.value })}>
-              {Object.entries(QUERY).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </label>
-          {num('kBefore', 'top-K до', 'кандидатов из векторного поиска', 1, 1, 50)}
-          {num('simMin', 'порог косинуса', 'меньшее сходство отбрасывается сразу', 0.01, 0, 1)}
-          {num('relMin', 'порог реранкера', 'оценка 0–1: ниже — отрывок не про вопрос', 0.05, 0, 1)}
-          {num('kAfter', 'top-K после', 'сколько отрывков максимум уходит в модель', 1, 1, 10)}
-          <label className="setting" title="Порядок отрывков, прошедших пороги">
-            <span className="setting-label">порядок</span>
-            <select value={draft.order} onChange={(e) => set({ order: e.target.value })}>
-              <option value="cosine">по косинусу</option>
-              <option value="rerank">по реранкеру</option>
-              <option value="fused">косинус + реранкер (RRF)</option>
-            </select>
-          </label>
-        </div>
+        {!off && (
+          <div className="settings-group">
+            <div className="settings-title">Поиск</div>
+            <label className="setting wide" title="Что превращать в вектор для поиска">
+              <span className="setting-label">запрос для поиска</span>
+              <select value={draft.query} onChange={(e) => set({ query: e.target.value })}>
+                {Object.entries(QUERY).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {num('kBefore', 'top-K до', 'кандидатов из векторного поиска', 1, 1, 50)}
+            {num('simMin', 'порог косинуса', 'меньшее сходство отбрасывается сразу', 0.01, 0, 1)}
+            {num('relMin', 'порог реранкера', 'оценка 0–1: ниже — отрывок не про вопрос', 0.05, 0, 1)}
+            {num('kAfter', 'top-K после', 'сколько отрывков максимум уходит в модель', 1, 1, 10)}
+            <label className="setting" title="Порядок отрывков, прошедших пороги">
+              <span className="setting-label">порядок</span>
+              <select value={draft.order} onChange={(e) => set({ order: e.target.value })}>
+                <option value="cosine">по косинусу</option>
+                <option value="rerank">по реранкеру</option>
+                <option value="fused">косинус + реранкер (RRF)</option>
+              </select>
+            </label>
+          </div>
+        )}
         <div className="settings-group">
           <div className="settings-title">Генерация</div>
           {opt('temperature', 'температура', '0 — точнее и однообразнее, 1–2 — разнообразнее; пусто — значение модели', 0.1, 0, 2, 'модели')}

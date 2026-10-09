@@ -153,6 +153,8 @@ test('настройки: границы', () => {
     settingsLine({ query: 'raw', kBefore: 10, kAfter: 5, simMin: 0, relMin: 0, compressAfter: 12, temperature: 0.7, maxTokens: 2000, ctx: 32768 }),
     'поиск: как есть, top-10 → 5, косинус ≥ 0, реранкер ≥ 0 · сжатие после 12 сообщений · t=0.7, ≤2000 ток., ctx 32768'
   );
+  // без RAG -- только сжатие и генерация
+  assert.equal(settingsLine({ query: 'hyde', kBefore: 10, kAfter: 5, compressAfter: 12, ctx: 32768 }, true), 'сжатие после 12 сообщений · ctx 32768');
 });
 
 test('параметры генерации: пусто -- значение модели, иначе в границах', () => {

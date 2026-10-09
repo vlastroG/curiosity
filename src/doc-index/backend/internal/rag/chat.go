@@ -250,14 +250,21 @@ const compressSystem = `Ты сжимаешь старую часть бесед
 Прежнюю сводку, если она есть, включи в новую. Верни только текст сводки.`
 
 // Compressor сворачивает старые сообщения в сводку.
-type Compressor struct{ LLM LLM }
+type Compressor struct {
+	LLM    LLM
+	System string // промпт сжатия; пусто -- беседа о книгах Твена
+}
 
 // Compress -- новая сводка из прежней и сжимаемых сообщений.
 // g -- параметры чата: то же окно, что у ответов, чтобы Ollama не перезагружала модель.
 func (c Compressor) Compress(ctx context.Context, summary string, turns []Turn, g Gen) (string, error) {
 	var b strings.Builder
 	writeDialogue(&b, summary, turns)
-	text, err := c.LLM.With(g).ask(ctx, compressSystem, b.String())
+	system := c.System
+	if system == "" {
+		system = compressSystem
+	}
+	text, err := c.LLM.With(g).ask(ctx, system, b.String())
 	if err != nil {
 		return "", err
 	}
