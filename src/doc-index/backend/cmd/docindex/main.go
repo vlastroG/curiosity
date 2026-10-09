@@ -247,6 +247,12 @@ func serve(ctx context.Context) error {
 		Agent: ag, Chats: a.service(ag), ChatDefaults: a.settings, LLMBudget: a.llm.MaxTokens,
 		LLMError: a.llmErr, Tuned: a.tuned, LLMContext: a.llmContext(ctx), LocalInfo: a.localInfo(),
 	})
+	// в домашней сети (docker-compose.lan.yml) без пароля не стартуем
+	password := os.Getenv("DOCINDEX_PASSWORD")
+	if password == "" && os.Getenv("DOCINDEX_LAN") != "" {
+		return errors.New("доступ из сети без пароля: задайте DOCINDEX_PASSWORD в корневом .env")
+	}
+	handler = httpapi.BasicAuth(env("DOCINDEX_USER", "twain"), password, handler)
 	addr := ":" + env("PORT", "8080")
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {

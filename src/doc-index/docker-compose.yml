@@ -4,7 +4,8 @@
 #   ollama    -- модели эмбеддингов на видеокарте NVIDIA; веса моделей в томе ollama-models
 #   llmcli    -- только с --profile local: локальная модель ответов (RAG_MODEL=local)
 #
-# Другая видеокарта или macOS -- см. docker-compose.amd.yml и docker-compose.mac.yml.
+# Другая видеокарта или macOS -- см. docker-compose.amd.yml и docker-compose.mac.yml;
+# доступ с других устройств домашней сети -- docker-compose.lan.yml.
 name: doc-index
 
 services:
@@ -12,7 +13,8 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "5180:8080"
+      # только с этой машины; доступ из домашней сети -- docker-compose.lan.yml
+      - "127.0.0.1:5180:8080"
     env_file:
       - path: ../../.env
         required: false
