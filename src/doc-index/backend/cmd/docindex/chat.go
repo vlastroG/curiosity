@@ -18,7 +18,8 @@ import (
 	"doc-index/internal/rag"
 )
 
-// chatCmd -- беседа в терминале. Чат сохраняется и виден в веб-интерфейсе.
+// chatCmd -- беседа в терминале. Чат сохраняется и виден в веб-интерфейсе
+// первому пользователю.
 func chatCmd(ctx context.Context) error {
 	a, err := setup()
 	if err != nil {
@@ -29,7 +30,7 @@ func chatCmd(ctx context.Context) error {
 		return a.llmErr
 	}
 	svc := a.service(a.agent(a.searcher()))
-	c, err := a.chats.Create(ctx, a.settings)
+	c, err := a.chats.Create(ctx, a.owner(), a.settings)
 	if err != nil {
 		return err
 	}
@@ -189,7 +190,7 @@ func scenarioCmd(ctx context.Context, args []string) error {
 		if *only != "" && sc.ID != *only {
 			continue
 		}
-		c, err := a.chats.Create(ctx, st)
+		c, err := a.chats.Create(ctx, a.owner(), st)
 		if err != nil {
 			return err
 		}

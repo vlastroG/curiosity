@@ -11,10 +11,14 @@ import (
 	"doc-index/internal/search"
 )
 
-func chatID(r *http.Request) (int64, error) {
+// chatID -- номер чата из пути; чужой чат -- как несуществующий.
+func (a *API) chatID(r *http.Request) (int64, error) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		return 0, chat.ErrNotFound
+	}
+	if err := a.Chats.Store.Owns(r.Context(), id, UserFrom(r.Context())); err != nil {
+		return 0, err
 	}
 	return id, nil
 }
@@ -37,7 +41,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 func (a *API) listChats(w http.ResponseWriter, r *http.Request) {
-	list, err := a.Chats.Store.List(r.Context())
+	list, err := a.Chats.Store.List(r.Context(), UserFrom(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -45,9 +49,9 @@ func (a *API) listChats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"chats": list})
 }
 
-// createChat -- новый чат с настройками по умолчанию.
+// createChat -- новый чат пользователя с настройками по умолчанию.
 func (a *API) createChat(w http.ResponseWriter, r *http.Request) {
-	c, err := a.Chats.Store.Create(r.Context(), a.ChatDefaults)
+	c, err := a.Chats.Store.Create(r.Context(), UserFrom(r.Context()), a.ChatDefaults)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -56,7 +60,7 @@ func (a *API) createChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getChat(w http.ResponseWriter, r *http.Request) {
-	id, err := chatID(r)
+	id, err := a.chatID(r)
 	if err != nil {
 		chatError(w, err)
 		return
@@ -71,7 +75,7 @@ func (a *API) getChat(w http.ResponseWriter, r *http.Request) {
 
 // patchChat -- название и/или настройки.
 func (a *API) patchChat(w http.ResponseWriter, r *http.Request) {
-	id, err := chatID(r)
+	id, err := a.chatID(r)
 	if err != nil {
 		chatError(w, err)
 		return
@@ -99,7 +103,7 @@ func (a *API) patchChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteChat(w http.ResponseWriter, r *http.Request) {
-	id, err := chatID(r)
+	id, err := a.chatID(r)
 	if err != nil {
 		chatError(w, err)
 		return
@@ -113,7 +117,7 @@ func (a *API) deleteChat(w http.ResponseWriter, r *http.Request) {
 
 // putState -- память задачи целиком, как её поправил пользователь.
 func (a *API) putState(w http.ResponseWriter, r *http.Request) {
-	id, err := chatID(r)
+	id, err := a.chatID(r)
 	if err != nil {
 		chatError(w, err)
 		return
@@ -139,7 +143,7 @@ func (a *API) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, errors.New(msg))
 		return
 	}
-	id, err := chatID(r)
+	id, err := a.chatID(r)
 	if err != nil {
 		chatError(w, err)
 		return

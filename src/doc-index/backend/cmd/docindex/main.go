@@ -102,6 +102,7 @@ type app struct {
 	settings chat.Settings // настройки нового чата
 	tuned    bool          // настройки поиска взяты из подбора experiment
 	chats    *chat.Store
+	users    []httpapi.User // логины интерфейса; первый -- владелец чатов из CLI
 
 	llm      rag.LLM
 	llmErr   error
@@ -139,6 +140,14 @@ func setup() (*app, error) {
 		return nil, err
 	}
 	if a.chats, err = chat.Open(st.DB()); err != nil {
+		return nil, err
+	}
+	a.users, err = httpapi.ParseUsers(os.Getenv("DOCINDEX_USERS"), env("DOCINDEX_USER", "twain"), os.Getenv("DOCINDEX_PASSWORD"))
+	if err != nil {
+		return nil, err
+	}
+	// чаты, созданные до разделения по пользователям, -- первому
+	if err := a.chats.Adopt(context.Background(), a.owner()); err != nil {
 		return nil, err
 	}
 	m, provider, err := llm.ResolveModel(os.Getenv("RAG_MODEL"), os.Getenv)
@@ -195,6 +204,9 @@ func (a *app) agent(s *search.Searcher) *rag.Agent {
 	}
 }
 
+// owner -- пользователь, которому достаются чаты из CLI (chat, scenario).
+func (a *app) owner() string { return a.users[0].Name }
+
 func (a *app) service(ag *rag.Agent) *chat.Service {
 	return &chat.Service{Store: a.chats, Agent: ag, Compressor: rag.Compressor{LLM: a.llm}}
 }
@@ -248,11 +260,15 @@ func serve(ctx context.Context) error {
 		LLMError: a.llmErr, Tuned: a.tuned, LLMContext: a.llmContext(ctx), LocalInfo: a.localInfo(),
 	})
 	// в домашней сети (docker-compose.lan.yml) без пароля не стартуем
-	password := os.Getenv("DOCINDEX_PASSWORD")
-	if password == "" && os.Getenv("DOCINDEX_LAN") != "" {
-		return errors.New("доступ из сети без пароля: задайте DOCINDEX_PASSWORD в корневом .env")
+	if a.users[0].Password == "" && os.Getenv("DOCINDEX_LAN") != "" {
+		return errors.New("доступ из сети без пароля: задайте DOCINDEX_PASSWORD или DOCINDEX_USERS в корневом .env")
 	}
-	handler = httpapi.BasicAuth(env("DOCINDEX_USER", "twain"), password, handler)
+	handler = httpapi.Auth(a.users, handler)
+	names := make([]string, len(a.users))
+	for i, u := range a.users {
+		names[i] = u.Name
+	}
+	log.Printf("пользователи: %s; пароль: %v", strings.Join(names, ", "), a.users[0].Password != "")
 	addr := ":" + env("PORT", "8080")
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {

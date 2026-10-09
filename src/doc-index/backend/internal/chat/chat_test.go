@@ -78,18 +78,18 @@ func TestCRUDAndDelete(t *testing.T) {
 	ctx := context.Background()
 	cs := open(t)
 	svc := &chat.Service{Store: cs, Agent: &fakeAgent{topic: "Добро и зло"}, Compressor: &fakeSummarizer{}}
-	a, err := cs.Create(ctx, settings(12))
+	a, err := cs.Create(ctx, "", settings(12))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.Title != chat.DefaultTitle || a.Named || len(a.Messages) != 0 || a.State.Theses == nil {
 		t.Fatalf("новый чат: %+v", a)
 	}
-	b, _ := cs.Create(ctx, settings(12))
+	b, _ := cs.Create(ctx, "", settings(12))
 	if _, err := svc.Send(ctx, a.ID, "Гек и совесть"); err != nil {
 		t.Fatal(err)
 	}
-	list, _ := cs.List(ctx)
+	list, _ := cs.List(ctx, "")
 	if len(list) != 2 || list[0].ID != a.ID || list[0].Title != "Добро и зло" || list[0].Count != 2 || list[0].Last != "ответ 1 [1]" {
 		t.Fatalf("список: %+v", list[0])
 	}
@@ -124,7 +124,7 @@ func TestSendStoresAnswerSourcesAndState(t *testing.T) {
 	cs := open(t)
 	agent := &fakeAgent{topic: "Добро и зло"}
 	svc := &chat.Service{Store: cs, Agent: agent, Compressor: &fakeSummarizer{}}
-	c, _ := cs.Create(ctx, settings(12))
+	c, _ := cs.Create(ctx, "", settings(12))
 	if _, err := svc.Send(ctx, c.ID, "  "); err == nil {
 		t.Error("пустое сообщение принято")
 	}
@@ -155,7 +155,7 @@ func TestLockedTopicAndUserItemsSurvive(t *testing.T) {
 	ctx := context.Background()
 	cs := open(t)
 	svc := &chat.Service{Store: cs, Agent: &fakeAgent{topic: "Другая тема"}, Compressor: &fakeSummarizer{}}
-	c, _ := cs.Create(ctx, settings(12))
+	c, _ := cs.Create(ctx, "", settings(12))
 	if err := cs.SetState(ctx, c.ID, rag.TaskState{Topic: "", TopicLocked: true}); err == nil {
 		t.Error("закреплена пустая тема")
 	}
@@ -185,7 +185,7 @@ func TestCompressionAfterN(t *testing.T) {
 	svc := &chat.Service{Store: cs, Agent: agent, Compressor: sum}
 	st := settings(6)
 	st.Gen = rag.Gen{Ctx: 8192}
-	c, _ := cs.Create(ctx, st)
+	c, _ := cs.Create(ctx, "", st)
 	var got *chat.Chat
 	for i := 1; i <= 3; i++ { // 6 сообщений -- ещё не больше порога
 		got, _ = svc.Send(ctx, c.ID, fmt.Sprintf("реплика %d", i))
@@ -215,7 +215,7 @@ func TestFailedReplyIsStoredButNotSentBack(t *testing.T) {
 	cs := open(t)
 	agent := &fakeAgent{fail: true}
 	svc := &chat.Service{Store: cs, Agent: agent, Compressor: &fakeSummarizer{err: errors.New("x")}}
-	c, _ := cs.Create(ctx, settings(12))
+	c, _ := cs.Create(ctx, "", settings(12))
 	got, err := svc.Send(ctx, c.ID, "вопрос")
 	if err != nil || got.Messages[1].Error == "" {
 		t.Fatalf("ошибка ответа: %v %+v", err, got.Messages)
@@ -227,5 +227,48 @@ func TestFailedReplyIsStoredButNotSentBack(t *testing.T) {
 	}
 	if _, err := svc.Send(ctx, 999, "x"); !errors.Is(err, chat.ErrNotFound) {
 		t.Fatalf("нет чата: %v", err)
+	}
+}
+
+func TestOwners(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	// чат из схемы до разделения по пользователям -- без владельца
+	if _, err := st.DB().Exec(`CREATE TABLE chats (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL DEFAULT '',
+		created TEXT NOT NULL, updated TEXT NOT NULL, settings TEXT NOT NULL, state TEXT NOT NULL,
+		summary TEXT NOT NULL DEFAULT '', summarized_upto INTEGER NOT NULL DEFAULT 0);
+		INSERT INTO chats (created, updated, settings, state) VALUES ('2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z', '{}', '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := chat.Open(st.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.Adopt(ctx, "twain"); err != nil {
+		t.Fatal(err)
+	}
+	huck, _ := cs.Create(ctx, "huck", settings(12))
+	if err := cs.Owns(ctx, 1, "twain"); err != nil {
+		t.Errorf("старый чат не отдан первому пользователю: %v", err)
+	}
+	if err := cs.Owns(ctx, huck.ID, "twain"); !errors.Is(err, chat.ErrNotFound) {
+		t.Errorf("чужой чат: %v", err)
+	}
+	if err := cs.Owns(ctx, 99, "huck"); !errors.Is(err, chat.ErrNotFound) {
+		t.Errorf("несуществующий чат: %v", err)
+	}
+	for owner, want := range map[string]int64{"twain": 1, "huck": huck.ID} {
+		list, err := cs.List(ctx, owner)
+		if err != nil || len(list) != 1 || list[0].ID != want {
+			t.Errorf("чаты %s: %v %+v", owner, err, list)
+		}
+	}
+	// повторное открытие не трогает уже добавленный столбец
+	if _, err := chat.Open(st.DB()); err != nil {
+		t.Fatal(err)
 	}
 }
