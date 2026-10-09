@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
-import { STAGE, chapterHue, citedNumbers, fmtMs, funnelLine, readHash, sectionsLabel, splitCitations } from '../format.js';
+import { STAGE, chapterHue, citedNumbers, fmtMs, funnelLine, readHash, sectionsLabel } from '../format.js';
+import Markdown from './Markdown.jsx';
 
 export function Waiting({ text }) {
   return (
@@ -11,8 +12,8 @@ export function Waiting({ text }) {
 }
 
 // Reply -- ответ эксперта: текст со сносками, строка источников (всегда)
-// и свёрнутый блок «Как искали».
-export default function Reply({ m, books }) {
+// и свёрнутый блок «Как искали». plain -- RAG выключен: только текст.
+export default function Reply({ m, books, plain }) {
   const [open, setOpen] = useState(false);
   const [lit, setLit] = useState(0);
   const ref = useRef(null);
@@ -25,9 +26,17 @@ export default function Reply({ m, books }) {
     setTimeout(() => ref.current?.querySelector(`[data-source="${n}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
   };
 
+  if (plain) {
+    return (
+      <div className="reply">
+        {m.error ? <div className="error">{m.error}</div> : <Markdown text={m.text} />}
+      </div>
+    );
+  }
+
   return (
     <div className="reply">
-      {m.error ? <div className="error">{m.error}</div> : <AnswerText text={m.text} onCite={cite} lit={lit} />}
+      {m.error ? <div className="error">{m.error}</div> : <Markdown text={m.text} onCite={cite} lit={lit} />}
       <div className="sources-line">
         <span className="sources-label">Источники:</span>
         {sources.length === 0 ? (
@@ -51,26 +60,6 @@ export default function Reply({ m, books }) {
           <How r={r} lit={lit} books={books} />
         </div>
       </details>
-    </div>
-  );
-}
-
-function AnswerText({ text, onCite, lit }) {
-  return (
-    <div className="answer-text">
-      {text.split(/\n{2,}/).map((para, i) => (
-        <p key={i}>
-          {splitCitations(para).map((seg, j) =>
-            seg.cite ? (
-              <button key={j} type="button" className={`cite ${lit === seg.cite ? 'lit' : ''}`} onClick={() => onCite(seg.cite)}>
-                {seg.cite}
-              </button>
-            ) : (
-              <span key={j}>{seg.text}</span>
-            )
-          )}
-        </p>
-      ))}
     </div>
   );
 }

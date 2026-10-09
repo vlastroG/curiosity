@@ -25,7 +25,7 @@ type Replier interface {
 
 // Summarizer сворачивает старые сообщения в сводку (rag.Compressor или заглушка).
 type Summarizer interface {
-	Compress(ctx context.Context, summary string, turns []rag.Turn) (string, error)
+	Compress(ctx context.Context, summary string, turns []rag.Turn, g rag.Gen) (string, error)
 }
 
 // Service -- ход беседы.
@@ -114,7 +114,7 @@ func (s *Service) compress(ctx context.Context, c *Chat, all []Message) error {
 	}
 	old := fresh[:len(fresh)-Keep]
 	upto := old[len(old)-1].Seq
-	summary, err := s.Compressor.Compress(ctx, c.Summary, turns(old, 0))
+	summary, err := s.Compressor.Compress(ctx, c.Summary, turns(old, 0), c.Settings.Gen)
 	if err != nil {
 		return err
 	}

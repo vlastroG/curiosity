@@ -52,7 +52,13 @@ type Config struct {
 	ChatDefaults chat.Settings // настройки нового чата
 	LLMBudget    int           // бюджет вывода модели ответов
 	LLMError     error         // модель ответов недоступна (нет ключа и т. п.)
-	Tuned        bool          // настройки поиска подобраны командой experiment
+	LLMContext   int           // контекстное окно облачной модели; 0 -- неизвестно
+	// LocalInfo -- сведения о локальной модели от llmcli; nil -- модель облачная
+	LocalInfo func(ctx context.Context) (map[string]any, error)
+	Tuned     bool // настройки поиска подобраны командой experiment
+	// NoRAG -- RAG=off: чат без поиска, Agent не нужен; поиск и индексация выключены
+	NoRAG bool
+	Model string // модель ответов -- для статуса при NoRAG
 }
 
 // API -- обработчики.
@@ -72,14 +78,17 @@ func New(cfg Config) http.Handler {
 	a := &API{Config: cfg, gpuOK: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", a.status)
-	mux.HandleFunc("POST /api/search", a.search)
-	mux.HandleFunc("GET /api/questions", a.questions)
+	// без RAG поиск и индексация не нужны: эмбеддинги и реранкер не загружаются в видеопамять
+	if !cfg.NoRAG {
+		mux.HandleFunc("POST /api/search", a.search)
+		mux.HandleFunc("GET /api/questions", a.questions)
+		mux.HandleFunc("POST /api/index", a.startIndex)
+		mux.HandleFunc("GET /api/index/events", a.indexEvents)
+	}
 	mux.HandleFunc("GET /api/books/{book}", a.book)
 	mux.HandleFunc("GET /api/books/{book}/sections/{n}", a.section)
 	mux.HandleFunc("GET /api/books/{book}/sections/{n}/chunks", a.sectionChunks)
 	mux.HandleFunc("GET /api/chunks/{variant}/{id}", a.chunk)
-	mux.HandleFunc("POST /api/index", a.startIndex)
-	mux.HandleFunc("GET /api/index/events", a.indexEvents)
 	mux.HandleFunc("GET /api/chats", a.listChats)
 	mux.HandleFunc("POST /api/chats", a.createChat)
 	mux.HandleFunc("GET /api/chats/{id}", a.getChat)
@@ -135,6 +144,9 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 		ol["version"] = ver
 		gpu := map[string]embed.Placement{}
 		for _, v := range a.Searcher.Variants {
+			if a.NoRAG {
+				break
+			}
 			if p, err := a.Ollama.Where(ctx, v.Model); err == nil {
 				gpu[v.Model] = p
 			}
@@ -171,12 +183,28 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 	out["variants"] = vs
 
 	ragInfo := map[string]any{"embedModel": a.Searcher.Variants[0].Model}
+	if a.NoRAG {
+		ragInfo = map[string]any{"off": true, "model": a.Model}
+	}
 	if a.Agent != nil {
 		ragInfo["model"] = a.Agent.LLM.Model
 		ragInfo["reranker"] = a.Agent.Reranker.Name()
+	}
+	if a.Agent != nil || a.NoRAG {
 		ragInfo["defaults"] = a.ChatDefaults
 		ragInfo["budget"] = a.LLMBudget
 		ragInfo["tuned"] = a.Tuned
+		ragInfo["context"] = a.LLMContext
+	}
+	if a.LocalInfo != nil {
+		ragInfo["local"] = true
+		lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		info, err := a.LocalInfo(lctx)
+		cancel()
+		if err != nil {
+			info = map[string]any{"error": "llmcli недоступен: " + err.Error()}
+		}
+		ragInfo["localInfo"] = info
 	}
 	if a.LLMError != nil {
 		ragInfo["error"] = a.LLMError.Error()
@@ -253,6 +281,13 @@ func (a *API) requireGPU(ctx context.Context, model string) error {
 	a.gpuMu.Unlock()
 	if ok {
 		return nil
+	}
+	// с локальной моделью ответов Ollama выгружает эмбеддинги и реранкер,
+	// чтобы поместить её: выгруженная модель -- не ошибка, проверим в другой раз
+	if a.LocalInfo != nil {
+		if p, err := a.Ollama.Where(ctx, model); err == nil && !p.Loaded {
+			return nil
+		}
 	}
 	if _, err := a.Ollama.RequireGPU(ctx, model); err != nil {
 		return err

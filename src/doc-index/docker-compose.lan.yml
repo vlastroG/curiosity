@@ -1,0 +1,11 @@
+# Доступ из домашней сети: интерфейс открыт на всех адресах этой машины и закрыт
+# паролем DOCINDEX_PASSWORD из корневого .env (без пароля doc-index не стартует).
+# Ollama и llmcli по-прежнему недоступны снаружи.
+#   docker compose -f docker-compose.yml -f docker-compose.lan.yml --profile local up -d --build
+# Порт 5180 нужно открыть в брандмауэре Windows для частной сети -- lan-firewall.ps1.
+services:
+  doc-index:
+    ports: !override
+      - "5180:8080"
+    environment:
+      DOCINDEX_LAN: "1"

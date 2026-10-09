@@ -238,6 +238,18 @@ export function clampSettings(s) {
     kAfter: Math.round(c(s.kAfter, 1, 10, 5)),
     order: ['rerank', 'cosine', 'fused'].includes(s.order) ? s.order : 'cosine',
     compressAfter: Math.round(c(s.compressAfter, 4, 50, 12)),
+    ...clampGen(s),
+  };
+}
+
+// clampGen -- параметры генерации; пусто -- значение модели (null или 0).
+export function clampGen(s) {
+  const blank = (v) => v === undefined || v === null || v === '' || !Number.isFinite(Number(v));
+  const opt = (v, lo, hi) => (blank(v) || Number(v) === 0 ? 0 : Math.round(Math.min(hi, Math.max(lo, Number(v)))));
+  return {
+    temperature: blank(s.temperature) ? null : Math.min(2, Math.max(0, Number(s.temperature))),
+    maxTokens: opt(s.maxTokens, 16, 100000),
+    ctx: opt(s.ctx, 2048, 262144),
   };
 }
 
@@ -274,14 +286,27 @@ export function citedNumbers(text) {
   return new Set(splitCitations(text).filter((s) => s.cite).map((s) => s.cite));
 }
 
-// settingsLine -- настройки чата кратко, для свёрнутой панели.
-export function settingsLine(s) {
+// settingsLine -- настройки чата кратко, для свёрнутой панели; off -- RAG выключен.
+export function settingsLine(s, off = false) {
   if (!s) return '';
   const q = { hyde: 'HyDE', en: 'перевод', raw: 'как есть' }[s.query] || s.query;
-  return `поиск: ${q}, top-${s.kBefore} → ${s.kAfter}, косинус ≥ ${s.simMin}, реранкер ≥ ${s.relMin} · сжатие после ${s.compressAfter} сообщений`;
+  const gen = [];
+  if (s.temperature !== undefined && s.temperature !== null) gen.push(`t=${s.temperature}`);
+  if (s.maxTokens > 0) gen.push(`≤${s.maxTokens} ток.`);
+  if (s.ctx > 0) gen.push(`ctx ${s.ctx}`);
+  const search = off ? '' : `поиск: ${q}, top-${s.kBefore} → ${s.kAfter}, косинус ≥ ${s.simMin}, реранкер ≥ ${s.relMin} · `;
+  return `${search}сжатие после ${s.compressAfter} сообщений` + (gen.length ? ` · ${gen.join(', ')}` : '');
 }
 
 // isFresh -- пункт памяти, появившийся, после реплики seq (подсветка «новое»).
 export function isFresh(item, seq) {
   return !!seq && item.by === 'model' && item.since === seq;
+}
+
+// linkCitations -- сноски [n] и [1, 2] в Markdown-ссылки #cite-n: их рисует
+// кнопка сноски внутри размеченного ответа.
+export function linkCitations(text) {
+  return splitCitations(text)
+    .map((s) => (s.cite ? `[${s.cite}](#cite-${s.cite})` : s.text))
+    .join('');
 }

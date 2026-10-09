@@ -21,26 +21,76 @@ type Chatter interface {
 	Chat(ctx context.Context, p llm.Provider, req llm.Request) (llm.Response, error)
 }
 
+// Gen -- параметры генерации чата. Пустые (0, null) -- значения модели.
+type Gen struct {
+	Temperature *float64 `json:"temperature"`
+	MaxTokens   int      `json:"maxTokens"` // предел ответа; 0 -- бюджет модели
+	Ctx         int      `json:"ctx"`       // контекстное окно; только у локальной модели
+}
+
+// Пределы параметров генерации.
+const (
+	MinMaxTokens = 16
+	MinCtx       = 2048
+	MaxCtx       = 262_144
+)
+
+// Validate проверяет диапазоны.
+func (g Gen) Validate() error {
+	if t := g.Temperature; t != nil && (*t < 0 || *t > 2) {
+		return errors.New("температура: 0–2")
+	}
+	if g.MaxTokens != 0 && (g.MaxTokens < MinMaxTokens || g.MaxTokens > llm.MaxTokens) {
+		return fmt.Errorf("предел ответа: %d–%d токенов", MinMaxTokens, llm.MaxTokens)
+	}
+	if g.Ctx != 0 && (g.Ctx < MinCtx || g.Ctx > MaxCtx) {
+		return fmt.Errorf("контекстное окно: %d–%d токенов", MinCtx, MaxCtx)
+	}
+	return nil
+}
+
 // LLM -- модель и провайдер.
 type LLM struct {
 	Client    Chatter
 	Provider  llm.Provider
 	Model     string
 	MaxTokens int // бюджет вывода; 0 -- llm.MaxTokens
+	Gen       Gen // параметры чата
+}
+
+// With -- та же модель с параметрами чата.
+func (m LLM) With(g Gen) LLM {
+	m.Gen = g
+	return m
 }
 
 func (m LLM) ask(ctx context.Context, system, user string) (string, error) {
+	return m.chat(ctx, []llm.Message{
+		{Role: llm.RoleSystem, Content: system},
+		{Role: llm.RoleUser, Content: user},
+	})
+}
+
+// chat -- запрос с готовыми сообщениями, с бюджетом и параметрами чата.
+func (m LLM) chat(ctx context.Context, msgs []llm.Message) (string, error) {
 	budget := m.MaxTokens
 	if budget <= 0 {
 		budget = llm.MaxTokens
 	}
+	if m.Gen.MaxTokens > 0 {
+		budget = min(budget, m.Gen.MaxTokens)
+	}
+	numCtx := 0
+	// у облачных провайдеров окно фиксировано, и поля num_ctx они не знают
+	if m.Provider.ID == llm.ProviderLocal {
+		numCtx = m.Gen.Ctx
+	}
 	resp, err := m.Client.Chat(ctx, m.Provider, llm.Request{
-		Model:     m.Model,
-		MaxTokens: budget,
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: system},
-			{Role: llm.RoleUser, Content: user},
-		},
+		Model:       m.Model,
+		MaxTokens:   budget,
+		Temperature: m.Gen.Temperature,
+		NumCtx:      numCtx,
+		Messages:    msgs,
 	})
 	if err != nil {
 		return "", err

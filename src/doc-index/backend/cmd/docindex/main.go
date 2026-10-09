@@ -102,9 +102,12 @@ type app struct {
 	settings chat.Settings // настройки нового чата
 	tuned    bool          // настройки поиска взяты из подбора experiment
 	chats    *chat.Store
+	users    []httpapi.User // логины интерфейса; первый -- владелец чатов из CLI
+	noRAG    bool           // RAG=off: чат с моделью без поиска по книгам
 
-	llm    rag.LLM
-	llmErr error
+	llm      rag.LLM
+	llmErr   error
+	llmModel llm.Model
 }
 
 func setup() (*app, error) {
@@ -140,10 +143,19 @@ func setup() (*app, error) {
 	if a.chats, err = chat.Open(st.DB()); err != nil {
 		return nil, err
 	}
+	a.noRAG = strings.EqualFold(os.Getenv("RAG"), "off")
+	a.users, err = httpapi.ParseUsers(os.Getenv("DOCINDEX_USERS"), env("DOCINDEX_USER", "twain"), os.Getenv("DOCINDEX_PASSWORD"))
+	if err != nil {
+		return nil, err
+	}
+	// чаты, созданные до разделения по пользователям, -- первому
+	if err := a.chats.Adopt(context.Background(), a.owner()); err != nil {
+		return nil, err
+	}
 	m, provider, err := llm.ResolveModel(os.Getenv("RAG_MODEL"), os.Getenv)
 	a.llm = rag.LLM{Client: llm.New(durationEnv("LLM_TIMEOUT", 3*time.Minute)), Provider: provider, Model: m.ID,
 		MaxTokens: m.Budget()}
-	a.llmErr = err
+	a.llmErr, a.llmModel = err, m
 	return a, nil
 }
 
@@ -194,8 +206,39 @@ func (a *app) agent(s *search.Searcher) *rag.Agent {
 	}
 }
 
+// owner -- пользователь, которому достаются чаты из CLI (chat, scenario).
+func (a *app) owner() string { return a.users[0].Name }
+
 func (a *app) service(ag *rag.Agent) *chat.Service {
+	if a.noRAG {
+		return &chat.Service{Store: a.chats, Agent: rag.Plain{LLM: a.llm},
+			Compressor: rag.Compressor{LLM: a.llm, System: rag.PlainCompressSystem}}
+	}
 	return &chat.Service{Store: a.chats, Agent: ag, Compressor: rag.Compressor{LLM: a.llm}}
+}
+
+// llmContext -- контекстное окно облачной модели для настроек чата: из каталога
+// или у OpenRouter. 0 -- неизвестно (или модель локальная: окно знает llmcli).
+func (a *app) llmContext(ctx context.Context) int {
+	if a.llmErr != nil || a.llm.Provider.ID != llm.ProviderOpenRouter || a.llmModel.Context > 0 {
+		return a.llmModel.Context
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	n, err := llm.OpenRouterContext(ctx, a.llmModel.ID)
+	if err != nil {
+		log.Printf("контекст модели не узнан: %v", err)
+	}
+	return n
+}
+
+// localInfo -- сведения о локальной модели от llmcli; nil, если модель облачная.
+func (a *app) localInfo() func(context.Context) (map[string]any, error) {
+	if a.llm.Provider.ID != llm.ProviderLocal {
+		return nil
+	}
+	base := a.llm.Provider.BaseURL
+	return func(ctx context.Context) (map[string]any, error) { return llm.LocalInfo(ctx, base) }
 }
 
 func serve(ctx context.Context) error {
@@ -212,6 +255,10 @@ func serve(ctx context.Context) error {
 
 	s := a.searcher()
 	ag := a.agent(s)
+	svc := a.service(ag)
+	if a.noRAG {
+		ag = nil // без поиска API не трогает индекс, эмбеддинги и реранкер
+	}
 	handler := httpapi.New(httpapi.Config{
 		Store: a.store, Searcher: s, Ollama: a.ollama, OllamaURL: a.ollama.URL, Jobs: jobs,
 		Index: func(ctx context.Context, rebuild bool, emit func(index.Event)) error {
@@ -219,9 +266,19 @@ func serve(ctx context.Context) error {
 			return err
 		},
 		EvalPath: a.evalPath, Params: a.params, StaticDir: env("STATIC_DIR", "./web"),
-		Agent: ag, Chats: a.service(ag), ChatDefaults: a.settings, LLMBudget: a.llm.MaxTokens,
-		LLMError: a.llmErr, Tuned: a.tuned,
+		Agent: ag, Chats: svc, NoRAG: a.noRAG, Model: a.llm.Model, ChatDefaults: a.settings, LLMBudget: a.llm.MaxTokens,
+		LLMError: a.llmErr, Tuned: a.tuned, LLMContext: a.llmContext(ctx), LocalInfo: a.localInfo(),
 	})
+	// в домашней сети (docker-compose.lan.yml) без пароля не стартуем
+	if a.users[0].Password == "" && os.Getenv("DOCINDEX_LAN") != "" {
+		return errors.New("доступ из сети без пароля: задайте DOCINDEX_PASSWORD или DOCINDEX_USERS в корневом .env")
+	}
+	handler = httpapi.Auth(a.users, handler)
+	names := make([]string, len(a.users))
+	for i, u := range a.users {
+		names[i] = u.Name
+	}
+	log.Printf("пользователи: %s; пароль: %v", strings.Join(names, ", "), a.users[0].Password != "")
 	addr := ":" + env("PORT", "8080")
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -231,8 +288,13 @@ func serve(ctx context.Context) error {
 		_ = srv.Shutdown(shutdown)
 	}()
 	st := a.settings
-	log.Printf("слушаю %s; книг %d; эмбеддинги %s, реранкер %s; top-K до %d, косинус ≥ %.2f, реранкер ≥ %.2f, top-K после %d; сжатие после %d; ответы: %s",
-		addr, len(a.books), experiment.Model, a.reranker.Model, st.KBefore, st.SimMin, st.RelMin, st.KAfter, st.CompressAfter, a.llm.Model)
+	if a.noRAG {
+		log.Printf("слушаю %s; RAG выключен (RAG=off): чат с моделью без поиска; сжатие после %d; ответы: %s",
+			addr, st.CompressAfter, a.llm.Model)
+	} else {
+		log.Printf("слушаю %s; книг %d; эмбеддинги %s, реранкер %s; top-K до %d, косинус ≥ %.2f, реранкер ≥ %.2f, top-K после %d; сжатие после %d; ответы: %s",
+			addr, len(a.books), experiment.Model, a.reranker.Model, st.KBefore, st.SimMin, st.RelMin, st.KAfter, st.CompressAfter, a.llm.Model)
+	}
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
