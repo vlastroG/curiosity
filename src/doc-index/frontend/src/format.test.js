@@ -129,7 +129,7 @@ test('сноски в ответе', () => {
   assert.deepEqual(splitCitations(''), []);
 });
 
-import { funnelLine, clampSettings, clampGen, fmtWhen, memoryLine, citedNumbers, isFresh, settingsLine } from './format.js';
+import { funnelLine, clampSettings, clampGen, fmtWhen, memoryLine, citedNumbers, isFresh, settingsLine, linkCitations } from './format.js';
 
 test('строка воронки', () => {
   assert.equal(
@@ -188,4 +188,9 @@ test('память задачи кратко и свежие пункты', () =
 test('на какие отрывки сослался ответ', () => {
   assert.deepEqual([...citedNumbers('Гек решает [2]. И Джим [1, 2].')], [2, 1]);
   assert.equal(citedNumbers('без ссылок').size, 0);
+});
+
+test('сноски -- ссылки для Markdown', () => {
+  assert.equal(linkCitations('Том **красил** забор [1], а Гек — нет [2, 3].'), 'Том **красил** забор [1](#cite-1), а Гек — нет [2](#cite-2)[3](#cite-3).');
+  assert.equal(linkCitations('без сносок'), 'без сносок');
 });

@@ -302,3 +302,11 @@ export function settingsLine(s, off = false) {
 export function isFresh(item, seq) {
   return !!seq && item.by === 'model' && item.since === seq;
 }
+
+// linkCitations -- сноски [n] и [1, 2] в Markdown-ссылки #cite-n: их рисует
+// кнопка сноски внутри размеченного ответа.
+export function linkCitations(text) {
+  return splitCitations(text)
+    .map((s) => (s.cite ? `[${s.cite}](#cite-${s.cite})` : s.text))
+    .join('');
+}
