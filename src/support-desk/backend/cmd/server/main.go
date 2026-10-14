@@ -41,11 +41,11 @@ func run() error {
 	port := env("PORT", "8080")
 	dataDir := env("DATA_DIR", "/data")
 	product := env("SUPPORT_PRODUCT", "pyRevit")
-	embedModel := env("EMBED_MODEL", "bge-m3")
+	embedModel := env("SUPPORT_EMBED_MODEL", "bge-m3")
 	opts := docs.Options{
 		Root:    env("DOCS_PATH", "/docs"),
-		Include: list(env("DOCS_INCLUDE", ".md,.rst,.txt,.py,.yaml")),
-		Exclude: list(env("DOCS_EXCLUDE", ".git,node_modules,site-packages,dev,bin,release")),
+		Include: list(env("SUPPORT_DOCS_INCLUDE", ".md,.rst,.txt,.py,.yaml")),
+		Exclude: list(env("SUPPORT_DOCS_EXCLUDE", ".git,node_modules,site-packages,dev,bin,release")),
 		Model:   embedModel,
 	}
 
@@ -56,10 +56,10 @@ func run() error {
 	g := &guard.Guard{
 		URL:          env("TYPESAFE_URL", "https://api.typesafe.ai"),
 		APIKey:       os.Getenv("TYPESAFE_API_KEY"),
-		Model:        env("GUARD_MODEL", "jev-latest"),
+		Model:        env("SUPPORT_GUARD_MODEL", "jev-latest"),
 		Product:      product,
-		InjectionMax: number("GUARD_INJECTION", 0.7),
-		TopicMin:     number("GUARD_TOPIC", 0.3),
+		InjectionMax: number("SUPPORT_GUARD_INJECTION", 0.7),
+		TopicMin:     number("SUPPORT_GUARD_TOPIC", 0.3),
 	}
 	if g.Enabled() {
 		log.Printf("защита Jev: включена (%s)", g.Model)

@@ -10,8 +10,8 @@ Docs, UI text, log messages and code comments are written in Russian. Keep that.
 
 ## Projects
 
-- **Web apps** (Go backend + React 18/Vite frontend): `agent-sprout`, `crypto-watch`, `trip-agent`, `doc-index`.
-- **MCP servers** (Go, `github.com/modelcontextprotocol/go-sdk`, streamable HTTP on `/mcp`): `mcp-weather`, `mcp-money`, `mcp-places`, `mcp-trip`, `mcp-crypto`, `mcp-pipeline`.
+- **Web apps** (Go backend + React 18/Vite frontend): `agent-sprout`, `crypto-watch`, `trip-agent`, `doc-index`, `support-desk`.
+- **MCP servers** (Go, `github.com/modelcontextprotocol/go-sdk`, streamable HTTP on `/mcp`): `mcp-weather`, `mcp-money`, `mcp-places`, `mcp-trip`, `mcp-crypto`, `mcp-pipeline`, `mcp-tickets`.
 - **CLI agents:**
   - `pipeline-agent`, a CLI agent driving `mcp-pipeline`.
   - `llm-cli`, a local model through Ollama. It is a CLI plus an OpenAI-compatible `serve` mode.
@@ -21,6 +21,7 @@ Which app uses which MCP server:
 - `trip-agent` → places, weather, money, trip
 - `crypto-watch` → `mcp-crypto`
 - `pipeline-agent` → `mcp-pipeline`
+- `support-desk` → `mcp-tickets` (plus Ollama bge-m3 and a TypeSafe Jev guard)
 
 Each app's compose file builds the MCP servers it needs from sibling directories.
 

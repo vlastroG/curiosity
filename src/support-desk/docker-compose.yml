@@ -1,0 +1,69 @@
+# Поддержка пользователей: ассистент по продукту, RAG по документации + тикеты через MCP.
+#
+#   support-desk -- интерфейс, индекс документации, защита Jev, модель ответов   http://localhost:5181
+#   mcp-tickets  -- тикеты в SQLite (./data/tickets.db), MCP на /mcp
+#   ollama       -- эмбеддинги bge-m3 на видеокарте NVIDIA
+#
+# Документация продукта -- SUPPORT_DOCS_PATH в корневом .env, по умолчанию pyRevit рядом
+# с репозиторием; монтируется только для чтения. Индекс -- ./data/index.db.
+name: support-desk
+
+x-healthcheck: &healthcheck
+  test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+  interval: 5s
+  timeout: 3s
+  retries: 5
+  start_period: 3s
+
+services:
+  support-desk:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5181:8080"
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      TICKETS_URL: http://mcp-tickets:8080/mcp
+      DOCS_PATH: /docs
+    volumes:
+      - ./data:/data
+      - ${SUPPORT_DOCS_PATH:-../../../pyRevit}:/docs:ro
+    depends_on:
+      mcp-tickets: { condition: service_healthy }
+      ollama: { condition: service_healthy }
+
+  mcp-tickets:
+    build: ../mcp-tickets
+    restart: unless-stopped
+    environment:
+      DB_PATH: /data/tickets.db
+    volumes:
+      - ./data:/data
+    healthcheck: *healthcheck
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  ollama-models:
