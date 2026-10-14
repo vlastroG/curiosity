@@ -427,7 +427,46 @@ textarea {
   font-size: 13px;
 }
 
+/* свёрнутая панель -- узкая полоса с вертикальной кнопкой */
+.tickets-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.collapse-btn {
+  font-size: 13px;
+  padding: 0.2em 0.6em;
+}
+
+.rail {
+  display: none;
+}
+
+@media (min-width: 761px) {
+  .layout.panel-collapsed {
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+  .layout.panel-collapsed .tickets {
+    padding: 8px 4px;
+    overflow: hidden;
+  }
+  .layout.panel-collapsed .tickets-body {
+    display: none;
+  }
+  .layout.panel-collapsed .rail {
+    display: block;
+    width: 100%;
+    writing-mode: vertical-rl;
+    padding: 12px 0;
+    font-size: 13px;
+  }
+}
+
 @media (max-width: 760px) {
+  .collapse-btn {
+    display: none;
+  }
   .panel-toggle {
     display: inline-block;
   }

@@ -3,7 +3,9 @@ import { api } from '../api.js';
 import { STATUSES, statusLabel } from '../format.js';
 
 // TicketPanel -- тикеты для отладки: создать, сменить статус, прикрепить к вопросу.
-export default function TicketPanel({ attachedId, onAttach }) {
+// На широком экране панель сворачивается в узкую полосу (onToggle); на телефоне её
+// показывает кнопка «Тикеты» в шапке.
+export default function TicketPanel({ attachedId, onAttach, onToggle }) {
   const [filter, setFilter] = useState('');
   const [list, setList] = useState([]);
   const [title, setTitle] = useState('');
@@ -43,38 +45,48 @@ export default function TicketPanel({ attachedId, onAttach }) {
 
   return (
     <aside className="tickets">
-      <form className="ticket-form" onSubmit={create}>
-        <h2>Новый тикет</h2>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Заголовок" maxLength={200} />
-        <textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Описание"
-          maxLength={5000}
-          rows={3}
-        />
-        <button type="submit" disabled={!title.trim() || !description.trim()}>
-          Создать тикет
-        </button>
-      </form>
-      {error && <div className="error small">{error}</div>}
-      <div className="ticket-filter">
-        <h2>Тикеты</h2>
-        <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Фильтр по статусу">
-          <option value="">все</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {statusLabel(s)}
-            </option>
+      <button type="button" className="ghost rail" onClick={onToggle} aria-label="Показать тикеты">
+        Тикеты{list.length ? ` · ${list.length}` : ''}
+      </button>
+      <div className="tickets-body">
+        <form className="ticket-form" onSubmit={create}>
+          <div className="tickets-top">
+            <h2>Новый тикет</h2>
+            <button type="button" className="ghost collapse-btn" onClick={onToggle} aria-label="Свернуть панель тикетов">
+              Свернуть
+            </button>
+          </div>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Заголовок" maxLength={200} />
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Описание"
+            maxLength={5000}
+            rows={3}
+          />
+          <button type="submit" disabled={!title.trim() || !description.trim()}>
+            Создать тикет
+          </button>
+        </form>
+        {error && <div className="error small">{error}</div>}
+        <div className="ticket-filter">
+          <h2>Тикеты</h2>
+          <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Фильтр по статусу">
+            <option value="">все</option>
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {statusLabel(s)}
+              </option>
+            ))}
+          </select>
+        </div>
+        {list.length === 0 && <p className="muted small">Тикетов нет.</p>}
+        <ul className="ticket-list">
+          {list.map((t) => (
+            <Ticket key={t.id} t={t} attached={attachedId === t.id} onAttach={onAttach} onUpdate={update} />
           ))}
-        </select>
+        </ul>
       </div>
-      {list.length === 0 && <p className="muted small">Тикетов нет.</p>}
-      <ul className="ticket-list">
-        {list.map((t) => (
-          <Ticket key={t.id} t={t} attached={attachedId === t.id} onAttach={onAttach} onUpdate={update} />
-        ))}
-      </ul>
     </aside>
   );
 }

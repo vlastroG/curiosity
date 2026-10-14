@@ -4,10 +4,29 @@ import { indexLine } from './format.js';
 import Chat from './components/Chat.jsx';
 import TicketPanel from './components/TicketPanel.jsx';
 
+const COLLAPSED_KEY = 'support-desk:tickets-collapsed';
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
   const [status, setStatus] = useState(null);
   const [attached, setAttached] = useState(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => readCollapsed());
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch {
+      // без хранилища панель просто не запомнит состояние
+    }
+  }, [collapsed]);
 
   // пока индекс строится -- опрашиваем чаще, чтобы показывать ход
   useEffect(() => {
@@ -50,14 +69,14 @@ export default function App() {
           Тикеты
         </button>
       </header>
-      <main className={`layout ${panelOpen ? 'panel-open' : ''}`}>
+      <main className={`layout ${panelOpen ? 'panel-open' : ''} ${collapsed ? 'panel-collapsed' : ''}`}>
         <Chat
           product={product}
           ready={status?.index?.state === 'ready'}
           attached={attached}
           onDetach={() => setAttached(null)}
         />
-        <TicketPanel attachedId={attached?.id} onAttach={setAttached} />
+        <TicketPanel attachedId={attached?.id} onAttach={setAttached} onToggle={() => setCollapsed((v) => !v)} />
       </main>
     </div>
   );
