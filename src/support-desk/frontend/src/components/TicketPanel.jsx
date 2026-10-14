@@ -13,7 +13,10 @@ export default function TicketPanel({ attachedId, onAttach }) {
   const load = useCallback(() => {
     api.tickets(filter).then(setList, (err) => setError(err.message));
   }, [filter]);
-  useEffect(load, [load]);
+  // эффект не должен ничего возвращать, кроме функции очистки
+  useEffect(() => {
+    load();
+  }, [load]);
 
   async function create(e) {
     e.preventDefault();
@@ -78,7 +81,9 @@ export default function TicketPanel({ attachedId, onAttach }) {
 
 function Ticket({ t, attached, onAttach, onUpdate }) {
   const [resolution, setResolution] = useState(t.resolution);
-  useEffect(() => setResolution(t.resolution), [t.resolution]);
+  useEffect(() => {
+    setResolution(t.resolution);
+  }, [t.resolution]);
 
   return (
     <li className={`ticket ${attached ? 'attached' : ''}`}>

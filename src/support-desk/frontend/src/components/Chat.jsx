@@ -10,7 +10,9 @@ export default function Chat({ product, ready, attached, onDetach }) {
   const [busy, setBusy] = useState(false);
   const end = useRef(null);
 
-  useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [items, busy]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: 'end' });
+  }, [items, busy]);
 
   async function send(e) {
     e.preventDefault();
