@@ -128,6 +128,7 @@ type Ollama struct {
 	Inputs  int             // входов в них всего
 	FailAt  int             // упасть на этом вызове /api/embed (0 -- никогда)
 	Reranks int             // вызовов /api/generate (реранкер)
+	Evicted bool            // /api/ps пуст: модели выгружены (их вытеснила другая)
 	loaded  map[string]bool
 }
 
@@ -236,6 +237,9 @@ func NewOllama(models ...string) *Ollama {
 		defer o.mu.Unlock()
 		var ms []map[string]any
 		for m := range o.loaded {
+			if o.Evicted {
+				break
+			}
 			ms = append(ms, map[string]any{"name": m + ":latest", "model": m + ":latest",
 				"size": int64(1 << 30), "size_vram": o.VRAM})
 		}

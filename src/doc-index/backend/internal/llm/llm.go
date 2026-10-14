@@ -21,20 +21,22 @@ import (
 const (
 	ProviderDeepSeek   = "deepseek"
 	ProviderOpenRouter = "openrouter"
+	ProviderLocal      = "local"
 )
 
 // Provider -- куда и с каким ключом идти.
 type Provider struct {
 	ID           string
 	Title        string
+	BaseURL      string // адрес llmcli -- для сведений о локальной модели
 	Endpoint     string
 	APIKey       string
 	ExtraHeaders map[string]string
 }
 
 // Available -- есть ли ключ. Модели провайдера без ключа видны в интерфейсе,
-// но выбрать их нельзя.
-func (p Provider) Available() bool { return p.APIKey != "" }
+// но выбрать их нельзя. Локальной модели ключ не нужен.
+func (p Provider) Available() bool { return p.APIKey != "" || p.ID == ProviderLocal }
 
 // DeepSeek -- описание провайдера DeepSeek.
 func DeepSeek(apiKey string) Provider {
@@ -58,6 +60,17 @@ func OpenRouter(apiKey, appURL, appTitle string) Provider {
 			"HTTP-Referer": appURL,
 			"X-Title":      appTitle,
 		},
+	}
+}
+
+// Local -- локальная модель через llmcli serve (src/llm-cli): тот же протокол, без ключа.
+func Local(url string) Provider {
+	url = strings.TrimRight(url, "/")
+	return Provider{
+		ID:       ProviderLocal,
+		Title:    "llmcli (локальная модель)",
+		BaseURL:  url,
+		Endpoint: url + "/v1/chat/completions",
 	}
 }
 
@@ -100,6 +113,10 @@ type Request struct {
 	Messages  []Message
 	Tools     []Tool
 	MaxTokens int
+	// Temperature -- nil: значение модели
+	Temperature *float64
+	// NumCtx -- контекстное окно; расширение llmcli, облачным провайдерам не передаётся
+	NumCtx int
 }
 
 // Usage -- расход токенов.
@@ -183,7 +200,9 @@ func (c *Client) once(ctx context.Context, p Provider, body []byte) (Response, b
 	if err != nil {
 		return Response{}, false, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+	if p.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	for name, value := range p.ExtraHeaders {
 		httpReq.Header.Set(name, value)
@@ -260,11 +279,13 @@ func short(raw []byte) string {
 }
 
 type wireRequest struct {
-	Model     string     `json:"model"`
-	Messages  []Message  `json:"messages"`
-	Tools     []wireTool `json:"tools,omitempty"`
-	MaxTokens int        `json:"max_tokens,omitempty"`
-	Stream    bool       `json:"stream"`
+	Model       string     `json:"model"`
+	Messages    []Message  `json:"messages"`
+	Tools       []wireTool `json:"tools,omitempty"`
+	MaxTokens   int        `json:"max_tokens,omitempty"`
+	Temperature *float64   `json:"temperature,omitempty"`
+	NumCtx      int        `json:"num_ctx,omitempty"`
+	Stream      bool       `json:"stream"`
 }
 
 type wireTool struct {
@@ -277,7 +298,8 @@ type wireTool struct {
 }
 
 func wire(req Request) wireRequest {
-	out := wireRequest{Model: req.Model, Messages: req.Messages, MaxTokens: req.MaxTokens}
+	out := wireRequest{Model: req.Model, Messages: req.Messages, MaxTokens: req.MaxTokens,
+		Temperature: req.Temperature, NumCtx: req.NumCtx}
 	for _, tool := range req.Tools {
 		var w wireTool
 		w.Type = "function"

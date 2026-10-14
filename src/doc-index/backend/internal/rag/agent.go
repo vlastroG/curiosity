@@ -15,6 +15,7 @@ import (
 type Settings struct {
 	Query string `json:"query"` // raw | en | hyde -- что превращать в вектор
 	rerank.Params
+	Gen
 }
 
 // Validate проверяет диапазоны.
@@ -23,6 +24,9 @@ func (s Settings) Validate() error {
 	case retrieve.QueryRaw, retrieve.QueryEnglish, retrieve.QueryHyDE:
 	default:
 		return fmt.Errorf("запрос для поиска: raw, en или hyde, а не %q", s.Query)
+	}
+	if err := s.Gen.Validate(); err != nil {
+		return err
 	}
 	return s.Params.Validate()
 }
@@ -76,8 +80,9 @@ func (a *Agent) Reply(ctx context.Context, c Conversation, text string, st Setti
 	text = strings.TrimSpace(text)
 	started := time.Now()
 	out := Result{Model: a.LLM.Model, Settings: st, Sources: []Source{}, State: c.State}
+	model := a.LLM.With(st.Gen)
 
-	plan, err := Planner{LLM: a.LLM}.Plan(ctx, c, text)
+	plan, err := Planner{LLM: model}.Plan(ctx, c, text)
 	out.PlanMs = ms(started)
 	query := st.Query
 	if err != nil {
@@ -121,7 +126,7 @@ func (a *Agent) Reply(ctx context.Context, c Conversation, text string, st Setti
 		out.Sources = append(out.Sources, Source{N: c.Final, Hit: c.Hit, Rel: c.Rel, Text: c.Text})
 	}
 
-	reply, err := a.LLM.ask(ctx, chatSystem, ChatPrompt(c, out.Sources, text))
+	reply, err := model.ask(ctx, chatSystem, ChatPrompt(c, out.Sources, text))
 	out.Answer = finish(reply, err, started)
 	return out
 }

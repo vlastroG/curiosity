@@ -76,6 +76,10 @@ func setup(t *testing.T) *fixture {
 		Chats:        &chat.Service{Store: chats, Agent: agent, Compressor: rag.Compressor{LLM: agent.LLM}},
 		ChatDefaults: chat.Settings{Settings: agent.Defaults, CompressAfter: 4},
 		LLMBudget:    1000,
+		LLMContext:   262144,
+		LocalInfo: func(context.Context) (map[string]any, error) {
+			return map[string]any{"model": "qwen3.5:9b-q4_K_M", "quantization": "Q4_K_M"}, nil
+		},
 		Index: func(ctx context.Context, rebuild bool, emit func(index.Event)) error {
 			_, err := ix.Run(ctx, rebuild, emit)
 			return err
@@ -374,8 +378,14 @@ func TestChats(t *testing.T) {
 		!strings.Contains(e["error"], "top-K до") {
 		t.Errorf("настройки вне диапазона: %d %v", code, e)
 	}
-	body := `{"title":"Забор","settings":{"query":"raw","kBefore":5,"simMin":0,"relMin":1,"kAfter":3,"order":"cosine","compressAfter":20}}`
-	if code := f.do(t, "PATCH", "/api/chats/"+id, body, &cr); code != 200 || cr.Chat.Title != "Забор" || cr.Chat.Settings.CompressAfter != 20 {
+	if code := f.do(t, "PATCH", "/api/chats/"+id, `{"settings":{"query":"hyde","kBefore":5,"kAfter":3,"order":"rerank","compressAfter":8,"ctx":100}}`, &e); code != 400 ||
+		!strings.Contains(e["error"], "контекстное окно") {
+		t.Errorf("окно вне диапазона: %d %v", code, e)
+	}
+	body := `{"title":"Забор","settings":{"query":"raw","kBefore":5,"simMin":0,"relMin":1,"kAfter":3,"order":"cosine","compressAfter":20,` +
+		`"temperature":0.4,"maxTokens":500,"ctx":16384}}`
+	if code := f.do(t, "PATCH", "/api/chats/"+id, body, &cr); code != 200 || cr.Chat.Title != "Забор" || cr.Chat.Settings.CompressAfter != 20 ||
+		cr.Chat.Settings.Temperature == nil || *cr.Chat.Settings.Temperature != 0.4 || cr.Chat.Settings.MaxTokens != 500 || cr.Chat.Settings.Ctx != 16384 {
 		t.Fatalf("настройки: %d %+v", code, cr.Chat.Settings)
 	}
 	f.post(t, "/api/chats/"+id+"/messages", `{"text":"а дальше?"}`, &cr)
@@ -417,18 +427,40 @@ func TestChats(t *testing.T) {
 	}
 }
 
+// С локальной моделью Ollama вытесняет эмбеддинги и реранкер из видеопамяти --
+// ответ не должен падать на проверке GPU.
+func TestChatLocalModelEvictsEmbeddings(t *testing.T) {
+	f := setup(t)
+	f.buildIndex(t)
+	var cr struct {
+		Chat chat.Chat `json:"chat"`
+	}
+	f.post(t, "/api/chats", ``, &cr)
+	f.ollama.Evicted = true
+	var e map[string]string
+	if code := f.post(t, "/api/chats/"+strconv.FormatInt(cr.Chat.ID, 10)+"/messages",`{"text":"кто красил забор?"}`, &e); code != 200 {
+		t.Fatalf("ответ упал на проверке GPU: %d %v", code, e)
+	}
+}
+
 func TestStatusShowsDefaults(t *testing.T) {
 	f := setup(t)
 	var st struct {
 		Rag struct {
-			Reranker string        `json:"reranker"`
-			Budget   int           `json:"budget"`
-			Defaults chat.Settings `json:"defaults"`
+			Reranker  string            `json:"reranker"`
+			Budget    int               `json:"budget"`
+			Defaults  chat.Settings     `json:"defaults"`
+			Context   int               `json:"context"`
+			Local     bool              `json:"local"`
+			LocalInfo map[string]string `json:"localInfo"`
 		} `json:"rag"`
 	}
 	f.get(t, "/api/status", &st)
 	if st.Rag.Reranker != "reranker" || st.Rag.Defaults.KBefore != 10 || st.Rag.Defaults.Query != "hyde" ||
 		st.Rag.Defaults.CompressAfter != 4 || st.Rag.Budget != 1000 {
 		t.Fatalf("%+v", st.Rag)
+	}
+	if st.Rag.Context != 262144 || !st.Rag.Local || st.Rag.LocalInfo["quantization"] != "Q4_K_M" {
+		t.Errorf("сведения о модели: %+v", st.Rag)
 	}
 }

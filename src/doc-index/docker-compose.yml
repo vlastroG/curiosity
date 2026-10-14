@@ -1,9 +1,11 @@
-# Два контейнера:
+# Контейнеры:
 #
 #   doc-index -- Go-сервер: веб-интерфейс, индексация, поиск; индекс и тексты книг в ./data
 #   ollama    -- модели эмбеддингов на видеокарте NVIDIA; веса моделей в томе ollama-models
+#   llmcli    -- только с --profile local: локальная модель ответов (RAG_MODEL=local)
 #
-# Другая видеокарта или macOS -- см. docker-compose.amd.yml и docker-compose.mac.yml.
+# Другая видеокарта или macOS -- см. docker-compose.amd.yml и docker-compose.mac.yml;
+# доступ с других устройств домашней сети -- docker-compose.lan.yml.
 name: doc-index
 
 services:
@@ -11,12 +13,14 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "5180:8080"
+      # только с этой машины; доступ из домашней сети -- docker-compose.lan.yml
+      - "127.0.0.1:5180:8080"
     env_file:
       - path: ../../.env
         required: false
     environment:
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      LLMCLI_URL: http://llmcli:8080
     volumes:
       # индекс (SQLite), скачанные книги -- рядом, на диске хоста
       - ./data:/data
@@ -26,6 +30,22 @@ services:
       ollama:
         condition: service_healthy
         required: false
+
+  # локальная модель qwen3.5:9b-q4_K_M через src/llm-cli; включается RAG_MODEL=local
+  # в корневом .env и запуском с --profile local
+  llmcli:
+    build: ../llm-cli
+    command: ["serve"]
+    profiles: [local]
+    restart: unless-stopped
+    env_file:
+      - path: ../../.env
+        required: false
+    environment:
+      OLLAMA_URL: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
 
   ollama:
     image: ollama/ollama:latest

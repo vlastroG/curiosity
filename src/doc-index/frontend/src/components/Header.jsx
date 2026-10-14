@@ -24,6 +24,7 @@ export default function Header({ route, status, error }) {
   const gpu = gpuState(status);
   const main = status?.variants?.[0]?.model || '…';
   const ref = useHeightVar('--header-h');
+  const off = !!status?.rag?.off;
 
   return (
     <header className="header" ref={ref}>
@@ -33,9 +34,11 @@ export default function Header({ route, status, error }) {
             ≋
           </span>
           <span>
-            <span className="brand-title">Twain Expert</span>
+            <span className="brand-title">{off ? 'Чат' : 'Twain Expert'}</span>
             <span className="brand-sub">
-              {status?.books?.length
+              {off
+                ? 'беседа с моделью без поиска по книгам'
+                : status?.books?.length
                 ? `${status.books.length} ${plural(status.books.length, 'книга', 'книги', 'книг')} Марка Твена · беседа по отрывкам из книг`
                 : 'книги Марка Твена с Project Gutenberg'}
             </span>
@@ -44,6 +47,8 @@ export default function Header({ route, status, error }) {
         <div className="header-status">
           {error ? (
             <span className="pill bad">сервер недоступен</span>
+          ) : off ? (
+            status?.rag?.model && <span className="pill">{status.rag.localInfo?.model || status.rag.model}</span>
           ) : (
             <>
               {status?.rag?.model && <span className="pill">{status.rag.model}</span>}
@@ -59,17 +64,19 @@ export default function Header({ route, status, error }) {
           )}
         </div>
       </div>
-      <nav className="tabs">
-        {TABS.map((t) => (
-          <a
-            key={t.view}
-            className={`tab ${route.view === t.view ? 'active' : ''}`}
-            href={t.view === 'read' && route.view === 'read' ? window.location.hash : routeHash(t.view)}
-          >
-            {t.title}
-          </a>
-        ))}
-      </nav>
+      {!off && (
+        <nav className="tabs">
+          {TABS.map((t) => (
+            <a
+              key={t.view}
+              className={`tab ${route.view === t.view ? 'active' : ''}`}
+              href={t.view === 'read' && route.view === 'read' ? window.location.hash : routeHash(t.view)}
+            >
+              {t.title}
+            </a>
+          ))}
+        </nav>
+      )}
     </header>
   );
 }

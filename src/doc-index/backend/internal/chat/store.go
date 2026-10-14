@@ -17,6 +17,7 @@ import (
 const schema = `
 CREATE TABLE IF NOT EXISTS chats (
 	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	owner           TEXT NOT NULL DEFAULT '', -- логин пользователя; у каждого свои чаты
 	title           TEXT NOT NULL DEFAULT '', -- пусто -- название по теме
 	created         TEXT NOT NULL,
 	updated         TEXT NOT NULL,
@@ -106,12 +107,39 @@ func (c *Chat) title(own string) {
 // Store -- чаты в SQLite.
 type Store struct{ db *sql.DB }
 
-// Open создаёт таблицы, если их нет.
+// Open создаёт таблицы, если их нет, и добавляет владельца в чаты старой схемы.
 func Open(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("схема чатов: %w", err)
 	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name = 'owner'`).Scan(&n); err != nil {
+		return nil, fmt.Errorf("схема чатов: %w", err)
+	}
+	if n == 0 {
+		if _, err := db.Exec(`ALTER TABLE chats ADD COLUMN owner TEXT NOT NULL DEFAULT ''`); err != nil {
+			return nil, fmt.Errorf("владелец чатов: %w", err)
+		}
+	}
 	return &Store{db: db}, nil
+}
+
+// Adopt отдаёт пользователю чаты без владельца -- созданные до разделения по пользователям.
+func (s *Store) Adopt(ctx context.Context, owner string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE chats SET owner = ? WHERE owner = ''`, owner)
+	return err
+}
+
+// Owns -- ErrNotFound, если чата нет или он чужой.
+func (s *Store) Owns(ctx context.Context, id int64, owner string) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM chats WHERE id = ? AND owner = ?`, id, owner).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -121,13 +149,13 @@ func parseTime(s string) time.Time {
 	return t
 }
 
-// Create -- новый пустой чат.
-func (s *Store) Create(ctx context.Context, st Settings) (*Chat, error) {
+// Create -- новый пустой чат пользователя owner.
+func (s *Store) Create(ctx context.Context, owner string, st Settings) (*Chat, error) {
 	settings, _ := json.Marshal(st)
 	state, _ := json.Marshal(rag.TaskState{Theses: []rag.Item{}, Open: []rag.Item{}})
 	t := now()
-	res, err := s.db.ExecContext(ctx, `INSERT INTO chats (created, updated, settings, state) VALUES (?, ?, ?, ?)`,
-		t, t, string(settings), string(state))
+	res, err := s.db.ExecContext(ctx, `INSERT INTO chats (owner, created, updated, settings, state) VALUES (?, ?, ?, ?, ?)`,
+		owner, t, t, string(settings), string(state))
 	if err != nil {
 		return nil, err
 	}
@@ -163,9 +191,10 @@ func scanChat(row interface{ Scan(...any) error }) (*Chat, error) {
 	return &c, nil
 }
 
-// List -- все чаты, свежие сверху, без сообщений.
-func (s *Store) List(ctx context.Context) ([]*Chat, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+chatColumns+` FROM chats c ORDER BY c.updated DESC, c.id DESC`)
+// List -- чаты пользователя owner, свежие сверху, без сообщений.
+func (s *Store) List(ctx context.Context, owner string) ([]*Chat, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+chatColumns+` FROM chats c WHERE c.owner = ? ORDER BY c.updated DESC, c.id DESC`, owner)
 	if err != nil {
 		return nil, err
 	}

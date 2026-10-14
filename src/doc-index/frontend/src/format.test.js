@@ -129,7 +129,7 @@ test('сноски в ответе', () => {
   assert.deepEqual(splitCitations(''), []);
 });
 
-import { funnelLine, clampSettings, fmtWhen, memoryLine, citedNumbers, isFresh, settingsLine } from './format.js';
+import { funnelLine, clampSettings, clampGen, fmtWhen, memoryLine, citedNumbers, isFresh, settingsLine, linkCitations } from './format.js';
 
 test('строка воронки', () => {
   assert.equal(
@@ -142,12 +142,25 @@ test('строка воронки', () => {
 test('настройки: границы', () => {
   assert.deepEqual(clampSettings({ query: 'x', kBefore: 99, simMin: -1, relMin: 'abc', kAfter: 3.6, compressAfter: 2 }), {
     query: 'hyde', kBefore: 50, simMin: 0, relMin: 0.5, kAfter: 4, order: 'cosine', compressAfter: 4,
+    temperature: null, maxTokens: 0, ctx: 0,
   });
   assert.equal(clampSettings({}).compressAfter, 12);
   assert.equal(
     settingsLine({ query: 'hyde', kBefore: 10, kAfter: 5, simMin: 0, relMin: 0.01, compressAfter: 12 }),
     'поиск: HyDE, top-10 → 5, косинус ≥ 0, реранкер ≥ 0.01 · сжатие после 12 сообщений'
   );
+  assert.equal(
+    settingsLine({ query: 'raw', kBefore: 10, kAfter: 5, simMin: 0, relMin: 0, compressAfter: 12, temperature: 0.7, maxTokens: 2000, ctx: 32768 }),
+    'поиск: как есть, top-10 → 5, косинус ≥ 0, реранкер ≥ 0 · сжатие после 12 сообщений · t=0.7, ≤2000 ток., ctx 32768'
+  );
+  // без RAG -- только сжатие и генерация
+  assert.equal(settingsLine({ query: 'hyde', kBefore: 10, kAfter: 5, compressAfter: 12, ctx: 32768 }, true), 'сжатие после 12 сообщений · ctx 32768');
+});
+
+test('параметры генерации: пусто -- значение модели, иначе в границах', () => {
+  assert.deepEqual(clampGen({ temperature: '', maxTokens: '', ctx: '' }), { temperature: null, maxTokens: 0, ctx: 0 });
+  assert.deepEqual(clampGen({ temperature: 0, maxTokens: 5, ctx: 1000 }), { temperature: 0, maxTokens: 16, ctx: 2048 });
+  assert.deepEqual(clampGen({ temperature: '3', maxTokens: 1e6, ctx: 1e7 }), { temperature: 2, maxTokens: 100000, ctx: 262144 });
 });
 
 test('время в списке чатов', () => {
@@ -175,4 +188,9 @@ test('память задачи кратко и свежие пункты', () =
 test('на какие отрывки сослался ответ', () => {
   assert.deepEqual([...citedNumbers('Гек решает [2]. И Джим [1, 2].')], [2, 1]);
   assert.equal(citedNumbers('без ссылок').size, 0);
+});
+
+test('сноски -- ссылки для Markdown', () => {
+  assert.equal(linkCitations('Том **красил** забор [1], а Гек — нет [2, 3].'), 'Том **красил** забор [1](#cite-1), а Гек — нет [2](#cite-2)[3](#cite-3).');
+  assert.equal(linkCitations('без сносок'), 'без сносок');
 });

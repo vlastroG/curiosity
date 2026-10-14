@@ -7,5 +7,9 @@ services:
     environment:
       OLLAMA_URL: http://host.docker.internal:11434
     depends_on: !reset {}
+  llmcli:
+    environment:
+      OLLAMA_URL: http://host.docker.internal:11434
+    depends_on: !reset {}
   ollama:
     profiles: [disabled]

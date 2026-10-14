@@ -43,8 +43,8 @@ export default function App() {
 
   useEffect(() => {
     refresh().then((s) => {
-      // индекса нет -- первым делом вкладка «Индекс»
-      const empty = s && !s.variants?.some((v) => v.ready);
+      // индекса нет -- первым делом вкладка «Индекс» (если RAG включён)
+      const empty = s && !s.rag?.off && !s.variants?.some((v) => v.ready);
       if (empty && !window.location.hash) window.location.hash = routeHash('index');
     });
     loadQuestions();
@@ -56,6 +56,13 @@ export default function App() {
   }, [route.view, refresh]);
 
   const indexReady = !!status?.variants?.some((v) => v.ready);
+  // RAG=off: только чат с моделью, без книг, поиска и индекса
+  const off = !!status?.rag?.off;
+  const view = off ? 'chat' : route.view;
+
+  useEffect(() => {
+    document.title = off ? 'Чат' : 'Twain Expert';
+  }, [off]);
 
   // вопросы проверяются по тексту книг: без индекса они все «не подтверждены»
   useEffect(() => {
@@ -66,12 +73,12 @@ export default function App() {
     <div className="app">
       <Header route={route} status={status} error={statusError} />
       <main className="main">
-        {route.view === 'chat' && <ChatView route={route} status={status} indexReady={indexReady} />}
-        {route.view === 'search' && (
+        {view === 'chat' && <ChatView route={route} status={status} indexReady={indexReady} />}
+        {view === 'search' && (
           <SearchView route={route} status={status} questions={questions} indexReady={indexReady} />
         )}
-        {route.view === 'read' && <ReaderView route={route} status={status} />}
-        {route.view === 'index' && (
+        {view === 'read' && <ReaderView route={route} status={status} />}
+        {view === 'index' && (
           <IndexView
             status={status}
             onChanged={() => {

@@ -105,6 +105,7 @@ export default function ChatView({ route, status, indexReady }) {
   };
 
   const rag = status?.rag || {};
+  const off = !!rag.off;
   const books = Object.fromEntries((status?.books || []).map((b) => [b.id, b]));
   const current = chats?.find((c) => c.id === id);
 
@@ -133,7 +134,7 @@ export default function ChatView({ route, status, indexReady }) {
       </aside>
 
       <section className="chat-main">
-        {!indexReady && status && (
+        {!indexReady && status && !off && (
           <div className="banner">
             Индекс ещё не построен — искать отрывки негде. <a href={routeHash('index')}>Построить на вкладке «Индекс» →</a>
           </div>
@@ -141,13 +142,14 @@ export default function ChatView({ route, status, indexReady }) {
         {rag.error && <div className="error">Модель ответов недоступна: {rag.error}</div>}
         {error && <div className="error">{error}</div>}
 
-        {!id && chats?.length === 0 && <Welcome onStart={create} />}
+        {!id && chats?.length === 0 && <Welcome onStart={create} off={off} />}
         {id && !chat && !error && <Waiting text="Загружаю чат…" />}
         {chat && (
           <Dialog
             key={chat.id}
             chat={chat}
             rag={rag}
+            off={off}
             books={books}
             pending={pending}
             freshSeq={freshSeq}
@@ -164,7 +166,18 @@ export default function ChatView({ route, status, indexReady }) {
   );
 }
 
-function Welcome({ onStart }) {
+function Welcome({ onStart, off }) {
+  if (off) {
+    return (
+      <div className="welcome">
+        <h2>Чат с моделью</h2>
+        <p className="muted">Обычная беседа: модель помнит историю чата, старые сообщения сворачиваются в сводку.</p>
+        <button className="btn primary" onClick={() => onStart()}>
+          + Новый чат
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="welcome">
       <h2>Беседа с экспертом по Марку Твену</h2>
@@ -186,7 +199,7 @@ function Welcome({ onStart }) {
   );
 }
 
-function Dialog({ chat, rag, books, pending, freshSeq, onSend, onRename, onDelete, onSettings, onState, onStart }) {
+function Dialog({ chat, rag, off, books, pending, freshSeq, onSend, onRename, onDelete, onSettings, onState, onStart }) {
   const [text, setText] = useState('');
   const [renaming, setRenaming] = useState(null);
   const end = useRef(null);
@@ -239,11 +252,11 @@ function Dialog({ chat, rag, books, pending, freshSeq, onSend, onRename, onDelet
         </header>
 
         <ChatSettings chat={chat} rag={rag} onSave={onSettings} />
-        <TaskMemory chat={chat} freshSeq={freshSeq} onSave={onState} />
+        {!off && <TaskMemory chat={chat} freshSeq={freshSeq} onSave={onState} />}
       </div>
 
       <div className="messages">
-        {count === 0 && !pending && (
+        {count === 0 && !pending && !off && (
           <div className="welcome small">
             <p className="muted">С чего начнём? Например:</p>
             <div className="chips">
@@ -257,7 +270,7 @@ function Dialog({ chat, rag, books, pending, freshSeq, onSend, onRename, onDelet
         )}
         {chat.messages.map((m) => (
           <Fragment key={m.seq}>
-            <Message m={m} books={books} compressed={m.seq <= chat.summarizedUpto} />
+            <Message m={m} books={books} off={off} compressed={m.seq <= chat.summarizedUpto} />
             {m.seq === chat.summarizedUpto && (
               <details className="compress-divider">
                 <summary>выше — сжато в сводку: модель видит её вместо этих сообщений</summary>
@@ -272,7 +285,7 @@ function Dialog({ chat, rag, books, pending, freshSeq, onSend, onRename, onDelet
               <div className="bubble">{pending}</div>
             </div>
             <div className="msg assistant">
-              <Waiting text="Ищу в книгах, обновляю память, отвечаю…" />
+              <Waiting text={off ? 'Отвечаю…' : 'Ищу в книгах, обновляю память, отвечаю…'} />
             </div>
           </>
         )}
@@ -286,7 +299,7 @@ function Dialog({ chat, rag, books, pending, freshSeq, onSend, onRename, onDelet
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e);
           }}
-          placeholder={count ? 'Ваша реплика…' : 'О чём поговорим? Например: совесть у Гека Финна'}
+          placeholder={count || off ? 'Ваша реплика…' : 'О чём поговорим? Например: совесть у Гека Финна'}
           title="Enter — отправить, Shift+Enter — перенос строки"
           rows={2}
           maxLength={2000}
@@ -300,13 +313,13 @@ function Dialog({ chat, rag, books, pending, freshSeq, onSend, onRename, onDelet
   );
 }
 
-function Message({ m, books, compressed }) {
+function Message({ m, books, off, compressed }) {
   return (
     <div className={`msg ${m.role} ${compressed ? 'compressed' : ''}`}>
       <div className="msg-meta muted small">
-        #{m.seq} · {m.role === 'user' ? 'вы' : 'эксперт'} · {fmtWhen(m.created)}
+        #{m.seq} · {m.role === 'user' ? 'вы' : off ? 'модель' : 'эксперт'} · {fmtWhen(m.created)}
       </div>
-      {m.role === 'user' ? <div className="bubble">{m.text}</div> : <Reply m={m} books={books} />}
+      {m.role === 'user' ? <div className="bubble">{m.text}</div> : <Reply m={m} books={books} plain={off} />}
     </div>
   );
 }
