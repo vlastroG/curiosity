@@ -1,0 +1,77 @@
+package llm
+
+// Модель задаётся переменной SUPPORT_MODEL. Провайдер -- из id: deepseek-* идёт
+// в DeepSeek, остальное -- в OpenRouter.
+
+import (
+	"fmt"
+	"strings"
+)
+
+// DefaultModel -- модель ответов по умолчанию.
+const DefaultModel = "deepseek-flash"
+
+// MaxTokens -- потолок бюджета вывода. Рассуждающие модели тратят его и на
+// рассуждения, так что он с большим запасом.
+const MaxTokens = 100_000
+
+// Model -- модель каталога.
+type Model struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Free  bool   `json:"free"`
+	// MaxOutput -- потолок вывода модели (OpenRouter /api/v1/models); 0 -- не меньше MaxTokens
+	MaxOutput int `json:"maxOutput,omitempty"`
+	// Context -- контекстное окно провайдера; 0 -- узнать у OpenRouter при запуске
+	Context int `json:"context,omitempty"`
+}
+
+// Budget -- бюджет вывода для модели: MaxTokens, но не выше её потолка.
+func (m Model) Budget() int {
+	if m.MaxOutput > 0 && m.MaxOutput < MaxTokens {
+		return m.MaxOutput
+	}
+	return MaxTokens
+}
+
+// Models -- допустимые значения SUPPORT_MODEL.
+var Models = []Model{
+	{ID: "nvidia/nemotron-3-super-120b-a12b:free", Title: "Nemotron 3 Super (free)", Free: true},
+	{ID: "google/gemma-4-31b-it:free", Title: "Gemma 4 31B (free)", Free: true, MaxOutput: 32_768},
+	{ID: "qwen/qwen3.8-27b:free", Title: "Qwen 3.8 27B (free)", Free: true},
+	{ID: DefaultModel, Title: "DeepSeek Flash", Context: 1_000_000},
+	{ID: "deepseek-v4-pro", Title: "DeepSeek V4 Pro", Context: 1_000_000},
+}
+
+// ResolveModel выбирает модель и провайдера. getenv -- os.Getenv.
+func ResolveModel(id string, getenv func(string) string) (Model, Provider, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = DefaultModel
+	}
+	var model Model
+	for _, m := range Models {
+		if m.ID == id {
+			model = m
+		}
+	}
+	if model.ID == "" {
+		ids := make([]string, len(Models))
+		for i, m := range Models {
+			ids[i] = m.ID
+		}
+		return Model{}, Provider{}, fmt.Errorf("неизвестная модель %q; допустимые: %s", id, strings.Join(ids, ", "))
+	}
+	appURL := getenv("APP_URL")
+	if appURL == "" {
+		appURL = "http://localhost"
+	}
+	provider, key := OpenRouter(getenv("OPENROUTER_API_KEY"), appURL, "Support Desk"), "OPENROUTER_API_KEY"
+	if strings.HasPrefix(id, "deepseek-") {
+		provider, key = DeepSeek(getenv("DEEPSEEK_API_KEY")), "DEEPSEEK_API_KEY"
+	}
+	if !provider.Available() {
+		return Model{}, Provider{}, fmt.Errorf("для модели %s нужен ключ %s", id, key)
+	}
+	return model, provider, nil
+}
