@@ -134,6 +134,9 @@ func (a *Assistant) Ask(ctx context.Context, question string, ticketID int64) (R
 		}
 		if len(resp.ToolCalls) == 0 || req.Tools == nil {
 			reply.Answer = strings.TrimSpace(resp.Text)
+			if reply.Answer == "" {
+				reply.Answer = emptyAnswer
+			}
 			return reply, nil
 		}
 		messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: resp.Text, ToolCalls: resp.ToolCalls})

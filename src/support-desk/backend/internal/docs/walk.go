@@ -23,6 +23,8 @@ type Options struct {
 	Include []string // расширения с точкой: .md, .py
 	Exclude []string // имена каталогов, которые пропускаются целиком
 	Model   string
+	// Label -- как назвать каталог в ошибках; в Docker Root -- /docs, а пользователь задавал путь на хосте
+	Label string
 }
 
 // File -- файл документации.
@@ -34,12 +36,16 @@ type File struct {
 
 // Walk -- подходящие файлы под Root, по возрастанию пути.
 func Walk(o Options) ([]File, error) {
+	label := o.Label
+	if label == "" {
+		label = o.Root
+	}
 	info, err := os.Stat(o.Root)
 	if err != nil {
-		return nil, fmt.Errorf("каталог документации %s недоступен: %w", o.Root, err)
+		return nil, fmt.Errorf("каталог документации %s недоступен: %w", label, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("DOCS_PATH %s -- не каталог", o.Root)
+		return nil, fmt.Errorf("%s -- не каталог", label)
 	}
 	var files []File
 	err = filepath.WalkDir(o.Root, func(path string, d fs.DirEntry, err error) error {
@@ -70,7 +76,7 @@ func Walk(o Options) ([]File, error) {
 		return nil, err
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("в DOCS_PATH %s нет подходящих файлов", o.Root)
+		return nil, fmt.Errorf("в %s нет подходящих файлов", label)
 	}
 	slices.SortFunc(files, func(a, b File) int { return strings.Compare(a.Path, b.Path) })
 	return files, nil

@@ -84,6 +84,12 @@ func TestWalkFilters(t *testing.T) {
 	if _, err := Walk(options(filepath.Join(root, "нет"))); err == nil {
 		t.Error("несуществующий каталог должен быть ошибкой")
 	}
+	// в Docker каталог -- /docs; в ошибке нужен путь, который задавал пользователь
+	labeled := options(t.TempDir())
+	labeled.Label = `SUPPORT_DOCS_PATH=C:\repos\pyRevt`
+	if _, err := Walk(labeled); err == nil || !strings.Contains(err.Error(), `SUPPORT_DOCS_PATH=C:\repos\pyRevt`) {
+		t.Errorf("в ошибке нет пути пользователя: %v", err)
+	}
 	if _, err := Walk(options(t.TempDir())); err == nil || !strings.Contains(err.Error(), "нет подходящих файлов") {
 		t.Errorf("пустой каталог: %v", err)
 	}

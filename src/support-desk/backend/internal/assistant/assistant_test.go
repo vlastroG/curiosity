@@ -196,3 +196,11 @@ func TestSourcesFromHits(t *testing.T) {
 		t.Errorf("источники %+v", r.Sources)
 	}
 }
+
+func TestEmptyAnswerFallback(t *testing.T) {
+	f := setup(llm.Response{Text: "  "})
+	r, err := f.a.Ask(context.Background(), "Почему не работает вход?", 0)
+	if err != nil || r.Answer != emptyAnswer {
+		t.Errorf("пустой ответ модели: %q %v", r.Answer, err)
+	}
+}

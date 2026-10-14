@@ -47,6 +47,7 @@ func run() error {
 		Include: list(env("SUPPORT_DOCS_INCLUDE", ".md,.rst,.txt,.py,.yaml")),
 		Exclude: list(env("SUPPORT_DOCS_EXCLUDE", ".git,node_modules,site-packages,dev,bin,release")),
 		Model:   embedModel,
+		Label:   env("DOCS_SOURCE", ""),
 	}
 
 	model, provider, err := llm.ResolveModel(os.Getenv("SUPPORT_MODEL"), os.Getenv)

@@ -28,6 +28,8 @@ services:
       OLLAMA_URL: http://ollama:11434
       TICKETS_URL: http://mcp-tickets:8080/mcp
       DOCS_PATH: /docs
+      # путь на хосте -- для понятных ошибок индексации
+      DOCS_SOURCE: SUPPORT_DOCS_PATH=${SUPPORT_DOCS_PATH:-../../../pyRevit}
     volumes:
       - ./data:/data
       - ${SUPPORT_DOCS_PATH:-../../../pyRevit}:/docs:ro
