@@ -1,0 +1,74 @@
+[
+  {
+    "title": "Не работает вход в pyRevit",
+    "description": "После обновления до 5.0 вкладка pyRevit не появляется, вход в аккаунт Autodesk не помогает.",
+    "status": "resolved",
+    "resolution": "Переподключить pyRevit к Revit через CLI: pyrevit attach master default --installed, затем перезапустить Revit."
+  },
+  {
+    "title": "Вкладка pyRevit пропала после обновления Revit до 2025",
+    "description": "Обновил Revit с 2024 на 2025 — вкладки pyRevit нет, в журнале загрузки надстроек ошибок не видно.",
+    "status": "resolved",
+    "resolution": "Старая версия pyRevit не поддерживает Revit 2025 (.NET 8). Установить актуальный релиз pyRevit и выполнить pyrevit attach master default --installed."
+  },
+  {
+    "title": "Revit долго запускается после установки pyRevit",
+    "description": "Старт Revit стал занимать почти минуту, раньше было 15 секунд. Установлено несколько сторонних расширений.",
+    "status": "resolved",
+    "resolution": "Отключить неиспользуемые расширения в pyRevit → Extensions и очистить кэш: pyrevit caches clear --all. Время загрузки вернулось к норме."
+  },
+  {
+    "title": "Кнопка Reload не подхватывает изменения в скрипте",
+    "description": "Правлю script.py своего расширения, жму Reload на вкладке pyRevit — работает старая версия скрипта.",
+    "status": "resolved",
+    "resolution": "Скрипт лежал в копии расширения вне пути из настроек. Проверить пути в pyRevit → Settings → Custom Extension Directories и править файл там; после правки — Reload."
+  },
+  {
+    "title": "Ошибка IronPython: No module named requests",
+    "description": "Скрипт расширения падает на import requests в окне вывода pyRevit.",
+    "status": "resolved",
+    "resolution": "IronPython 2.7 не видит пакеты из pip. Перевести скрипт на CPython: добавить в начало файла #! python3 и поставить пакет для CPython, либо использовать встроенные .NET-средства (System.Net)."
+  },
+  {
+    "title": "Не сохраняются настройки pyRevit",
+    "description": "Меняю настройки в окне Settings, после перезапуска Revit всё сбрасывается.",
+    "status": "in_progress",
+    "resolution": ""
+  },
+  {
+    "title": "Окно вывода pyRevit открывается пустым",
+    "description": "При запуске любой кнопки появляется белое окно вывода без текста, скрипт при этом отрабатывает.",
+    "status": "open",
+    "resolution": ""
+  },
+  {
+    "title": "Как установить pyRevit без прав администратора",
+    "description": "На рабочем ПК нет прав администратора, установщик требует повышения прав.",
+    "status": "resolved",
+    "resolution": "Использовать установщик для текущего пользователя (pyRevit_*_signed.exe без admin), он ставит pyRevit в %APPDATA%. Подключение к Revit — pyrevit attach master default --installed."
+  },
+  {
+    "title": "pyRevit CLI: команда pyrevit не найдена",
+    "description": "В командной строке 'pyrevit' не является внутренней или внешней командой.",
+    "status": "resolved",
+    "resolution": "Каталог CLI не попал в PATH. Перезайти в систему после установки или добавить в PATH путь к bin внутри каталога установки pyRevit."
+  },
+  {
+    "title": "Своё расширение не отображается на ленте",
+    "description": "Создал папку MyTools.extension с MyTab.tab и панелью, но вкладки нет даже после Reload.",
+    "status": "open",
+    "resolution": ""
+  },
+  {
+    "title": "Телеметрия: куда пишутся логи запуска скриптов",
+    "description": "Хотим собирать статистику использования кнопок в компании. Где включить и куда пишется?",
+    "status": "resolved",
+    "resolution": "Включить телеметрию в pyRevit → Settings → Telemetry, указать каталог для файлов или адрес сервера телеметрии. Записи создаются на каждый запуск команды."
+  },
+  {
+    "title": "После обновления Windows Revit падает при загрузке pyRevit",
+    "description": "Revit закрывается без сообщения на этапе загрузки надстроек, без pyRevit стартует нормально.",
+    "status": "open",
+    "resolution": ""
+  }
+]

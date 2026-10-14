@@ -20,6 +20,9 @@ MCP-сервер тикетов поддержки: SQLite в одном фай�
 PORT=8785 DB_PATH=./tickets.db go run .
 ```
 
+`SEED_FILE` — json-список `{title, description, status?, resolution?}`: при старте
+добавляются тикеты, чьих заголовков ещё нет в базе.
+
 Проверка:
 
 ```bash

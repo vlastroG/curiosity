@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -37,6 +38,14 @@ func run() error {
 		return err
 	}
 	defer store.Close()
+
+	if path := os.Getenv("SEED_FILE"); path != "" {
+		added, err := seed(context.Background(), store, path)
+		if err != nil {
+			return fmt.Errorf("посев тикетов: %w", err)
+		}
+		log.Printf("посев из %s: добавлено тикетов %d", path, added)
+	}
 
 	server := newServer(store)
 	mux := http.NewServeMux()

@@ -42,8 +42,11 @@ services:
     restart: unless-stopped
     environment:
       DB_PATH: /data/tickets.db
+      # тестовые тикеты; добавляются только те, чьих заголовков ещё нет
+      SEED_FILE: /seed/tickets.json
     volumes:
       - ./data:/data
+      - ./seed:/seed:ro
     healthcheck: *healthcheck
 
   ollama:
