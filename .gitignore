@@ -157,3 +157,6 @@ src/trip-agent/data/
 
 # данные Doc Index: индекс SQLite и скачанные книги
 src/doc-index/data/
+
+# данные Support Desk: индекс документации и тикеты
+src/support-desk/data/
